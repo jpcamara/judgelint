@@ -6,8 +6,16 @@ module Judgelint
   # compiling with Spinel.
   class Client
     RETRY_STATUSES = %w[408 429 500 502 503 504 529].freeze
+    # The native binary links OpenSSL statically, so it looks for certificates
+    # where OpenSSL was built. Unless SSL_CERT_FILE says otherwise, it uses the
+    # system's bundle: macOS and Alpine, Debian and Ubuntu, then Fedora and RHEL.
+    CA_BUNDLES = %w[/etc/ssl/cert.pem /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt].freeze
 
     def initialize(config, sleeper: ->(seconds) { sleep(seconds) })
+      if RUBY_ENGINE == "spinel" && ENV.fetch("SSL_CERT_FILE", "").empty?
+        bundle = CA_BUNDLES.find { |path| File.file?(path) }
+        ENV["SSL_CERT_FILE"] = bundle if bundle
+      end
       @config = config
       @protocol = Protocol::ALL.fetch(config.protocol) do
         raise ConfigError, "protocol is system_one or decisions, not #{config.protocol}"

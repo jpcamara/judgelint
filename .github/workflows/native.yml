@@ -1,0 +1,73 @@
+name: Native gems
+
+# Builds the Spinel binary on each platform, runs the test suite against it,
+# and packages the platform gems plus the plain Ruby one. Run it by hand or
+# by pushing a v* tag; the gems are uploaded as the run's artifacts.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+env:
+  # The Spinel commit the binaries are built with.
+  SPINEL_REF: 0b2f0166003cf9aeb1b266c6a6fc6b06c766edfc
+
+jobs:
+  native:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, platform: arm64-darwin }
+          - { os: macos-13, platform: x86_64-darwin }
+          - { os: ubuntu-22.04, platform: x86_64-linux }
+          - { os: ubuntu-22.04-arm, platform: aarch64-linux }
+    env:
+      # The oldest macOS the binary runs on; Homebrew's OpenSSL on these
+      # runners is built for the runner's own release.
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-13' && '13.0' || '14.0' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+
+      - name: Install OpenSSL
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            brew install openssl@3 coreutils
+            echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
+          else
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev
+          fi
+
+      - name: Build Spinel
+        run: |
+          git clone --filter=blob:none https://github.com/matz/spinel.git "$RUNNER_TEMP/spinel"
+          cd "$RUNNER_TEMP/spinel"
+          git checkout "$SPINEL_REF"
+          make deps
+          make -j"$(getconf _NPROCESSORS_ONLN)"
+          echo "SPINEL=$RUNNER_TEMP/spinel/bin/spinel" >> "$GITHUB_ENV"
+
+      - name: Test the binary
+        run: bundle exec rake test:spinel
+
+      - name: Check it needs nothing beyond the system's libraries
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then otool -L build/judgelint; else ldd build/judgelint; fi
+          ! { otool -L build/judgelint 2>/dev/null || ldd build/judgelint; } | grep -i -E 'ssl|crypto'
+
+      - name: Package
+        run: |
+          bundle exec rake gem:native
+          if [ "${{ matrix.platform }}" = x86_64-linux ]; then bundle exec rake gem; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gems-${{ matrix.platform }}
+          path: pkg/*.gem

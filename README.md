@@ -25,7 +25,9 @@ binary with [Spinel](https://github.com/matz/spinel).
 gem install judgelint
 ```
 
-Or build the native binary (see [Native binary](#native-binary)).
+On macOS (arm64, x86_64) and Linux (x86_64, aarch64), RubyGems picks a
+platform gem with the native binary inside, and `judgelint` runs it. Elsewhere,
+Windows included, you get the same tool in plain Ruby.
 
 ## Quick start
 
@@ -221,12 +223,19 @@ source runs on CRuby and as a native binary:
 
 ```sh
 git clone https://github.com/matz/spinel && (cd spinel && make deps && make)
-SPINEL=../spinel/bin/spinel rake spinel     # writes build/judgelint
+SPINEL=../spinel/bin/spinel rake spinel        # writes build/judgelint
 SPINEL=../spinel/bin/spinel rake test:spinel   # runs the CLI tests against it too
+SPINEL=../spinel/bin/spinel rake gem:native    # this platform's gem, into pkg/
 ```
 
-The binary links the OpenSSL Spinel was built against (Homebrew's `openssl@3`
-on macOS) and starts in a few milliseconds, against about 110 ms on CRuby.
+The binary links OpenSSL statically and needs nothing beyond the system's C
+library. It reads certificates from `SSL_CERT_FILE`, or else the system bundle
+(`/etc/ssl/cert.pem`, `/etc/ssl/certs/ca-certificates.crt`, or
+`/etc/pki/tls/certs/ca-bundle.crt`). Through the gem it starts in about 45 ms,
+against about 110 ms in plain Ruby; run directly, a few milliseconds. The
+[Native gems](.github/workflows/native.yml) workflow builds and tests the four
+platform gems. There's no native Windows build: Spinel's Windows port is
+best-effort, and the Ruby gem already runs there.
 
 Spinel's limits explain the odd choices: plain classes instead of `Data.define`
 (Spinel can't compile Data or Struct alongside `net/https` and `json`), a
