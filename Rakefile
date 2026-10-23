@@ -31,11 +31,14 @@ task :spinel do
       next [] if value.start_with?("-L")
       next [value] unless library
 
-      # Where Spinel found OpenSSL, or else wherever the compiler would (on
-      # Linux, the system's libssl-dev).
+      # Where Spinel found OpenSSL, pkg-config's or Homebrew's OpenSSL, or
+      # wherever the compiler would look (on Linux, the system's libssl-dev).
+      dirs = libdirs + [`pkg-config --variable=libdir openssl 2>/dev/null`.strip,
+                        "#{`brew --prefix openssl@3 2>/dev/null`.strip}/lib"]
       found = `#{ENV.fetch('CC', 'cc')} -print-file-name=lib#{library}.a`.strip
-      static = (libdirs.map { |dir| File.join(dir, "lib#{library}.a") } + [found]).find { |path| File.file?(path) }
-      abort "No static lib#{library}.a in #{libdirs.join(', ')} or the compiler's paths" unless static
+      candidates = dirs.reject(&:empty?).map { |dir| File.join(dir, "lib#{library}.a") } + [found]
+      static = candidates.find { |path| File.file?(path) }
+      abort "No static lib#{library}.a in #{candidates.join(', ')}" unless static
       [static]
     else []
     end
