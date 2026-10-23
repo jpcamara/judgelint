@@ -16,10 +16,8 @@ trade: narrow questions to a fast decision model instead of open-ended review.
 That means no free-text findings and no line numbers, but answers are cheap,
 fast, and calibrated enough to threshold.
 
-judgelint is written in Ruby with no runtime dependencies, and compiles to a
-native binary with [Spinel](https://github.com/matz/spinel). It speaks the
-System One protocol directly: the same request RubyLLM 2.1's Judge API sends
-through its TypeSafe provider, without RubyLLM, which Spinel can't compile.
+judgelint is Ruby with no runtime dependencies, and compiles to a native
+binary with [Spinel](https://github.com/matz/spinel).
 
 ## Install
 
@@ -47,10 +45,6 @@ lib/judgelint/scaffold.rb
 
 17 files, 1 violations, 1 uncertain
 ```
-
-(That's judgelint's first run on itself. The cache really did turn a corrupt
-file into an empty cache without saying so; it raises now. `scaffold.rb` holds
-the `init` example's bad code as a string, and is excluded.)
 
 Exit status is 0 when clean, 1 when an `error` rule is violated (or, for
 `judgelint test`, when an example is misjudged), and 2 for usage,
@@ -86,6 +80,12 @@ Swallowed exceptions hide bugs until they cost us data.
 The model sees only the question, `yes_means`, `no_means`, and the file (its
 path and contents). The body, message, severity, and threshold are yours.
 
+Each file is one request carrying every rule that governs it, so a file's
+verdicts never depend on which files ran beside it. The answer is the
+probability of yes, turned into a violation probability by `fail_when`: at or
+above `threshold` it's a violation, at or above `warn_at` it's uncertain
+(reported, never fails), and below that it passes.
+
 ### Examples
 
 Decision models are good at classifying and much weaker at applying a policy:
@@ -113,10 +113,9 @@ no-silent-rescue  9/10
 ```
 
 A miss means the question needs rewording, the threshold needs moving, or the
-convention is too broad for one question. That run is Jev on this repo's own
-rule. Adding "retries before eventually raising" to `no_means` took it to
-10/10; see [.judgelint/rules](.judgelint/rules). The model is shown each example's
-path relative to its `pass/` or `fail/` directory, so the directory name never
+convention is too broad for one question. (Adding "retries before eventually
+raising" to `no_means` took this repo's own rule to 10/10.) The model sees
+each example's path relative to `pass/` or `fail/`, so the directory never
 leaks the answer.
 
 ## Configuration
@@ -215,20 +214,6 @@ switching models is a miss; changing a threshold or severity is not, because
 the model never saw them. Commit the cache to share answers across machines
 and CI.
 
-## How it works
-
-For each file, judgelint collects the rules whose globs match it and sends one
-request with every rule as its own question. The state is the file's path and
-contents. Each answer is the probability of "yes", which becomes a violation
-probability through `fail_when` and then a verdict through the thresholds:
-
-- at or above `threshold`: violation
-- at or above `warn_at`: uncertain (reported, never fails)
-- below `warn_at`: pass
-
-Files are never batched together, so one file's verdict never depends on
-which files ran beside it.
-
 ## Native binary
 
 judgelint is written in the subset of Ruby that Spinel compiles. The same
@@ -240,20 +225,13 @@ SPINEL=../spinel/bin/spinel rake spinel     # writes build/judgelint
 SPINEL=../spinel/bin/spinel rake test:spinel   # runs the CLI tests against it too
 ```
 
-The binary uses Spinel's `net/https`, which links the OpenSSL it was built
-against (Homebrew's `openssl@3` on macOS). It starts in a few milliseconds,
-against about 110 ms for the gem on CRuby, so a fully cached run
-is effectively free.
+The binary links the OpenSSL Spinel was built against (Homebrew's `openssl@3`
+on macOS) and starts in a few milliseconds, against about 110 ms on CRuby.
 
-Writing for Spinel meant a few choices that look odd in CRuby:
-
-- Value objects are plain classes, not `Data.define`. Spinel can't compile a
-  Data or Struct in a program that also uses `net/https` and `json`.
-- Options are parsed by hand. Spinel can't compile this program's use of OptionParser.
-- `Hash#fetch` with a Float default on a YAML-loaded Hash is avoided; Spinel
-  miscompiles it.
-- No `method_missing`, `eval`, or runtime `define_method`, and no gems: the
-  HTTP client is `net/https`, not RubyLLM or Faraday.
+Spinel's limits explain the odd choices: plain classes instead of `Data.define`
+(Spinel can't compile Data or Struct alongside `net/https` and `json`), a
+hand-rolled option parser (it can't compile this use of OptionParser), no
+`Hash#fetch` with a Float default on YAML data (miscompiled), and no gems.
 
 ## Development
 

@@ -46,7 +46,7 @@ module Judgelint
     def self.write(root, out)
       rule = ".judgelint/rules/no-silent-rescue"
       files = {
-        ConfigLoader::FILE => CONFIG,
+        Config::FILE => CONFIG,
         "#{rule}.md" => RULE,
         File.join(rule, "pass", "logs_and_reraises.rb") => PASS_EXAMPLE,
         File.join(rule, "fail", "returns_nil.rb") => FAIL_EXAMPLE

@@ -11,7 +11,7 @@ module Judgelint
     end
 
     def check(verdicts, config:, file_count:)
-      return @out.puts(JSON.pretty_generate(check_json(verdicts, config, file_count))) if @format == "json"
+      return json(check_json(verdicts, config, file_count)) if @format == "json"
 
       shown = verdicts.reject { |verdict| verdict.status == :pass }
       shown.group_by(&:path).each do |path, group|
@@ -23,14 +23,14 @@ module Judgelint
     end
 
     def fixtures(examples)
-      return @out.puts(JSON.pretty_generate(fixtures_json(examples))) if @format == "json"
+      return json(fixtures_json(examples)) if @format == "json"
 
       examples.group_by(&:rule).each do |rule, group|
         correct = group.count(&:correct?)
         @out.puts "#{rule.id}  #{correct}/#{group.size}"
         group.each do |example|
           mark = example.correct? ? "ok" : "MISS"
-          @out.puts format("  %-4s %-4s %s  %s", mark, example.expected, probability(example.verdict), example.path)
+          @out.puts format("  %-4s %-4s %s  %s", mark, example.expected, probability(example), example.path)
         end
       end
       correct = examples.count(&:correct?)
@@ -39,6 +39,10 @@ module Judgelint
     end
 
     private
+
+    def json(data)
+      @out.puts JSON.pretty_generate(data)
+    end
 
     def line(verdict)
       label = verdict.status == :violation ? verdict.rule.severity : verdict.status.to_s
@@ -78,9 +82,7 @@ module Judgelint
         "version" => VERSION,
         "correct" => examples.count(&:correct?),
         "total" => examples.size,
-        "examples" => examples.map do |example|
-          example.verdict.to_h.merge("expected" => example.expected.to_s, "correct" => example.correct?)
-        end
+        "examples" => examples.map(&:to_h)
       }
     end
   end

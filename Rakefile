@@ -13,7 +13,7 @@ BINARY = "build/judgelint"
 desc "Compile the native binary with Spinel (set SPINEL to its path if it isn't on PATH)"
 task :spinel do
   mkdir_p "build"
-  sh SPINEL, "spinel/main.rb", "-o", BINARY
+  sh SPINEL, "-I", "lib", "exe/judgelint", "-o", BINARY
 end
 
 desc "Run the end-to-end tests against the Spinel binary too"

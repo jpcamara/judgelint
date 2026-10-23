@@ -177,7 +177,7 @@ class CLITest < Minitest::Test
         assert_equal 0, status, name
         assert_match(/no-silent-rescue\.md/, out, name)
       end
-      rules = Judgelint::RuleLoader.load_dir(".judgelint/rules", default_threshold: 0.7)
+      rules = Judgelint::Rule.load_dir(".judgelint/rules", default_threshold: 0.7)
       assert_equal ["no-silent-rescue"], rules.map(&:id)
     end
   end

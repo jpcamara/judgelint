@@ -38,14 +38,15 @@ module Judgelint
       @argv = argv.dup
       @out = out
       @err = err
-      @options = { "format" => "text", "config" => nil }
+      @format = "text"
+      @config_path = nil
       @overrides = {}
     end
 
     def run
       command = COMMANDS.include?(@argv.first) ? @argv.shift : "check"
       @argv = parse_options(@argv)
-      return 0 if @options["done"]
+      return 0 if @done
 
       case command
       when "check" then check
@@ -70,7 +71,6 @@ module Judgelint
       "-c" => "config", "--config" => "config", "-f" => "format", "--format" => "format",
       "--provider" => "provider", "--model" => "model", "--threshold" => "threshold"
     }.freeze
-    FORMATS = %w[text json].freeze
 
     def parse_options(argv)
       rest = []
@@ -87,12 +87,9 @@ module Judgelint
           set_option(VALUE_OPTIONS.fetch(name), value)
         elsif arg == "--no-cache"
           @overrides["cache"] = false
-        elsif arg == "-v" || arg == "--version"
-          @out.puts "judgelint #{VERSION}"
-          @options["done"] = true
-        elsif arg == "-h" || arg == "--help"
-          @out.puts HELP
-          @options["done"] = true
+        elsif %w[-v --version -h --help].include?(arg)
+          @out.puts(%w[-v --version].include?(arg) ? "judgelint #{VERSION}" : HELP)
+          @done = true
         elsif arg.start_with?("-") && arg != "-"
           raise UsageError, "unknown option #{arg}"
         else
@@ -104,11 +101,11 @@ module Judgelint
 
     def set_option(key, value)
       case key
-      when "config" then @options["config"] = value
+      when "config" then @config_path = value
       when "format"
-        raise UsageError, "--format is text or json, not #{value}" unless FORMATS.include?(value)
+        raise UsageError, "--format is text or json, not #{value}" unless %w[text json].include?(value)
 
-        @options["format"] = value
+        @format = value
       else @overrides[key] = value
       end
     end
@@ -121,7 +118,7 @@ module Judgelint
 
       paths = paths.select { |path| rules.any? { |rule| rule.applies_to?(path) } }
       verdicts = runner(config, rules).run(paths)
-      Reporter.new(@out, format: @options["format"]).check(verdicts, config: config, file_count: paths.size)
+      Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: paths.size)
       verdicts.any?(&:failing?) ? 1 : 0
     end
 
@@ -134,16 +131,13 @@ module Judgelint
         rules = rules.select { |rule| @argv.include?(rule.id) }
       end
 
-      cache = Cache.new(config.cache_path)
-      runner = Runner.new(config: config, rules: rules, client: Client.new(config), cache: cache)
-      examples = FixtureRunner.new(runner).run(rules)
-      cache.save
+      examples = runner(config, rules).examples
       if examples.empty?
         @err.puts "No examples found. Add files under <rules>/<id>/pass and <rules>/<id>/fail."
         return 0
       end
 
-      Reporter.new(@out, format: @options["format"]).fixtures(examples)
+      Reporter.new(@out, format: @format).fixtures(examples)
       examples.all?(&:correct?) ? 0 : 1
     end
 
@@ -161,8 +155,7 @@ module Judgelint
         model = preset["model"] || "(you choose)"
         key = preset["api_key_env"] || "no key"
         @out.puts format("%-13s %-28s %-22s %s", name, model, key, preset["api_base"] || "(your endpoint)")
-        need = PROVIDER_NEEDS[name]
-        @out.puts "              needs #{need}" if need
+        @out.puts "              needs #{preset['needs']}" if preset["needs"]
       end
       0
     end
@@ -174,8 +167,8 @@ module Judgelint
     end
 
     def load_rules
-      config = ConfigLoader.load(path: @options["config"], overrides: @overrides)
-      [config, RuleLoader.load_dir(config.rules_dir, default_threshold: config.threshold)]
+      config = Config.load(path: @config_path, overrides: @overrides)
+      [config, Rule.load_dir(config.rules_dir, default_threshold: config.threshold)]
     end
 
     def runner(config, rules)

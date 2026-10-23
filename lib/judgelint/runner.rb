@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # Judges files against the rules that govern them. Each file is one model
-  # request carrying every applicable rule as its own question, so a file's
-  # verdicts never depend on which other files ran alongside it.
+  # Judges files against the rules that govern them, and rules against their
+  # examples. Each file is one model request carrying every applicable rule as
+  # its own question, so a file's verdicts never depend on which other files
+  # ran alongside it.
   class Runner
     def initialize(config:, rules:, client:, cache:)
       @config = config
@@ -18,9 +19,24 @@ module Judgelint
       @cache.save
     end
 
-    # Judges one file against the given rules, whether or not they target it.
-    # +shown_as+ is the path the model sees, which fixtures use to keep their
-    # pass/ or fail/ directory out of the question.
+    # Files under rules/<id>/pass must not be judged violations, files under
+    # rules/<id>/fail must. The model sees each example's path relative to its
+    # pass/ or fail/ directory, so the directory never gives the answer away.
+    def examples
+      @rules.flat_map do |rule|
+        %i[pass fail].flat_map do |expected|
+          dir = File.join(rule.examples_dir, expected.to_s)
+          Glob.expand([File.join(dir, "**", "*")]).map do |path|
+            judge_file(path, [rule], shown_as: path.delete_prefix("#{dir}/")).first.as_example(expected)
+          end
+        end
+      end
+    ensure
+      @cache.save
+    end
+
+    private
+
     def judge_file(path, rules, shown_as: path)
       return [] if rules.empty?
 
@@ -40,14 +56,8 @@ module Judgelint
       end
     end
 
-    def self.state(path, content)
-      "Path: #{path}\n\n#{content}"
-    end
-
-    private
-
     def answer(path, content, rules)
-      state = self.class.state(path, content)
+      state = "Path: #{path}\n\n#{content}"
       probabilities = {}
       missing = []
       rules.each do |rule|

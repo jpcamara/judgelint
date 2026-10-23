@@ -7,7 +7,7 @@ class ConfigTest < Minitest::Test
 
   def test_defaults_to_jev_on_typesafe
     in_project do
-      config = Judgelint::ConfigLoader.load
+      config = Judgelint::Config.load
 
       assert_equal "typesafe", config.provider
       assert_equal "jev-latest", config.model
@@ -21,7 +21,7 @@ class ConfigTest < Minitest::Test
   def test_provider_presets_and_overrides
     in_project do
       write(".judgelint.yml", "provider: celeris\nthreshold: 0.6\ncache: false\n")
-      config = Judgelint::ConfigLoader.load(overrides: { "model" => "other" })
+      config = Judgelint::Config.load(overrides: { "model" => "other" })
 
       assert_equal "https://inference.celeris.ai/celeris-1-decision", config.api_base
       assert_equal "CELERIS_API_KEY", config.api_key_env
@@ -35,14 +35,14 @@ class ConfigTest < Minitest::Test
     in_project do
       write(".judgelint.yml", "provider: typesafe\nmodel: jev-preview\nthreshold: 0.6\n")
 
-      switched = Judgelint::ConfigLoader.load(overrides: { "provider" => "openai" })
+      switched = Judgelint::Config.load(overrides: { "provider" => "openai" })
       assert_equal "gpt-6-luna", switched.model
       assert_in_delta 0.6, switched.threshold
 
-      same = Judgelint::ConfigLoader.load(overrides: { "provider" => "typesafe" })
+      same = Judgelint::Config.load(overrides: { "provider" => "typesafe" })
       assert_equal "jev-preview", same.model
 
-      chosen = Judgelint::ConfigLoader.load(overrides: { "provider" => "openai", "model" => "gpt-6-luna-mini" })
+      chosen = Judgelint::Config.load(overrides: { "provider" => "openai", "model" => "gpt-6-luna-mini" })
       assert_equal "gpt-6-luna-mini", chosen.model
     end
   end
@@ -50,10 +50,10 @@ class ConfigTest < Minitest::Test
   def test_rejects_unknown_keys_and_bad_values
     in_project do
       write(".judgelint.yml", "modle: jev\n")
-      assert_raises(Judgelint::ConfigError) { Judgelint::ConfigLoader.load }
+      assert_raises(Judgelint::ConfigError) { Judgelint::Config.load }
 
       write(".judgelint.yml", "threshold: 0.3\nwarn_at: 0.5\n")
-      assert_raises(Judgelint::ConfigError) { Judgelint::ConfigLoader.load }
+      assert_raises(Judgelint::ConfigError) { Judgelint::Config.load }
     end
   end
 

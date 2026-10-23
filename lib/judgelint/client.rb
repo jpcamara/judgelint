@@ -9,7 +9,9 @@ module Judgelint
 
     def initialize(config, sleeper: ->(seconds) { sleep(seconds) })
       @config = config
-      @protocol = Protocol.for(config.protocol)
+      @protocol = Protocol::ALL.fetch(config.protocol) do
+        raise ConfigError, "protocol is system_one or decisions, not #{config.protocol}"
+      end
       @sleeper = sleeper
       check_settings
     end
@@ -22,8 +24,8 @@ module Judgelint
     end
 
     def url
-      base = ConfigLoader.expand(@config.api_base)
-      path = ConfigLoader.expand(@config.path).gsub("{model}", @config.model.to_s)
+      base = Config.expand(@config.api_base)
+      path = Config.expand(@config.path).gsub("{model}", @config.model.to_s)
       "#{base.delete_suffix('/')}/#{path.delete_prefix('/')}"
     end
 
@@ -63,8 +65,7 @@ module Judgelint
     def check_settings
       provider = @config.provider
       if @config.api_base.to_s.empty?
-        need = PROVIDER_NEEDS[provider] || "api_base"
-        raise ConfigError, "Provider #{provider} needs #{need} in .judgelint.yml"
+        raise ConfigError, "Provider #{provider} needs #{@config.needs || 'api_base'} in .judgelint.yml"
       end
       raise ConfigError, "Provider #{provider} needs a model in .judgelint.yml" if model_needed?
       raise ConfigError, "Set #{@config.api_key_env} to your #{provider} API key" if key_missing?
@@ -111,7 +112,7 @@ module Judgelint
       request["Content-Type"] = "application/json"
       request["Accept"] = "application/json"
       authorize(request)
-      @config.headers.each { |name, value| request[name.to_s] = ConfigLoader.expand(value.to_s) }
+      @config.headers.each { |name, value| request[name.to_s] = Config.expand(value.to_s) }
       request.body = body
       http.request(request)
     rescue Judgelint::Error
@@ -133,7 +134,7 @@ module Judgelint
     end
 
     def retry_delay(response, attempt)
-      after = RuleLoader.number(response["Retry-After"])
+      after = Judgelint.number(response["Retry-After"])
       after ? [after, 30.0].min : 0.5 * (2**(attempt - 1))
     end
 

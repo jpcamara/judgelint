@@ -125,7 +125,7 @@ class RunnerTest < Minitest::Test
       write(".judgelint/rules/smell/pass/nested/also_bad.rb", "SMELL")
       client = FakeClient.new { |state, _rule| state.include?("SMELL") ? 0.9 : 0.1 }
 
-      examples = Judgelint::FixtureRunner.new(runner([rule], client)).run([rule])
+      examples = runner([rule], client).examples
 
       assert_equal [true, false, true], examples.map(&:correct?)
       assert_equal ["Path: good.rb\n\nfine", "Path: nested/also_bad.rb\n\nSMELL", "Path: bad.rb\n\nSMELL"],

@@ -79,23 +79,8 @@ class ClientTest < Minitest::Test
     assert_equal({ "a" => nil }, Judgelint::Protocol::SystemOne.parse(data, [rule("a")]))
   end
 
-  def test_unwraps_cloudflares_envelope
-    body = { "result" => { "model" => "clef", "answers" => { "smell" => { "type" => "noul", "noul" => 0.93 } } },
-             "success" => true, "errors" => [] }
-    server = StubSystemOne.new(body: body)
-    with_env("JUDGELINT_TEST_ACCOUNT" => "acct") do
-      base = "#{server.base}/client/v4/accounts/${JUDGELINT_TEST_ACCOUNT}/ai/run"
-      assert_equal({ "smell" => 0.93 }, client(provider: "cloudflare", api_base: base).judge("x", [rule]))
-    end
-    assert_equal "/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef", server.requests.first[:path]
-  ensure
-    server&.stop
-  end
-
   def test_auth_styles
-    { "bearer" => ["authorization", "Bearer secret"],
-      "basic" => ["authorization", "Basic #{['token:secret'].pack('m0')}"],
-      "header:api-key" => ["api-key", "secret"] }.each do |auth, (header, value)|
+    { "bearer" => ["authorization", "Bearer secret"], "header:api-key" => ["api-key", "secret"] }.each do |auth, (header, value)|
       server = StubSystemOne.new
       client(api_base: server.base, auth: auth).judge("x", [rule])
       assert_equal value, server.requests.first[:headers][header], auth

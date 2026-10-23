@@ -5,14 +5,6 @@ module Judgelint
   # yes/no questions, so each renders a rule as that protocol's yes/no type
   # and reads back the probability of yes. A nil probability is a refusal.
   module Protocol
-    def self.for(name)
-      case name
-      when "system_one" then SystemOne
-      when "decisions" then Decisions
-      else raise ConfigError, "protocol is system_one or decisions, not #{name}"
-      end
-    end
-
     # TypeSafe's System One: questions keyed by name, yes/no is "noul".
     module SystemOne
       def self.payload(model, state, rules)
@@ -82,6 +74,8 @@ module Judgelint
         probabilities
       end
     end
+
+    ALL = { "system_one" => SystemOne, "decisions" => Decisions }.freeze
 
     def self.probability(answer, field, rule)
       return nil if answer.is_a?(Hash) && answer["type"] == "refusal"

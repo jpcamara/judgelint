@@ -107,15 +107,12 @@ module ProjectHelpers
   end
 
   def config(**overrides)
-    Judgelint::ConfigLoader.build({ "cache" => false }.merge(overrides.transform_keys(&:to_s)))
+    Judgelint::Config.new({ "cache" => false }.merge(overrides.transform_keys(&:to_s)))
   end
 
+  # A rule as its frontmatter would declare it.
   def rule(id = "smell", **fields)
-    defaults = {
-      id: id, question: "Does this code smell?", yes_means: nil, no_means: nil, fail_when: "yes",
-      paths: ["app/**/*.rb"], excludes: [], severity: "error", threshold: 0.7, message: "Smells.",
-      source: ".judgelint/rules/#{id}.md"
-    }
-    Judgelint::Rule.new(**defaults.merge(fields))
+    data = { "question" => "Does this code smell?", "paths" => ["app/**/*.rb"], "message" => "Smells." }
+    Judgelint::Rule.new(data.merge(fields.transform_keys(&:to_s)), source: ".judgelint/rules/#{id}.md")
   end
 end

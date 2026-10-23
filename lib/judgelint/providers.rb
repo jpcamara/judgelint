@@ -14,7 +14,8 @@ module Judgelint
   # api_key_env sends no credentials unless you set one.
   #
   # ${VAR} in api_base or path reads the environment; {model} in path is the
-  # model id. batch_size is the provider's most questions per request.
+  # model id. batch_size is the provider's most questions per request. needs
+  # says what a preset can't fill in for you.
   PROVIDERS = {
     "typesafe" => {
       "api_base" => "https://api.typesafe.ai", "api_key_env" => "TYPESAFE_API_KEY", "model" => "jev-latest"
@@ -54,23 +55,21 @@ module Judgelint
       "model" => "kai", "batch_size" => "100"
     },
     "foundry" => {
-      "path" => "/providers/microsoft/v1/systemone", "auth" => "header:api-key", "api_key_env" => "AZURE_API_KEY"
+      "path" => "/providers/microsoft/v1/systemone", "auth" => "header:api-key", "api_key_env" => "AZURE_API_KEY",
+      "needs" => "api_base (your Foundry resource endpoint) and model (your deployment name)"
     },
     "databricks" => {
-      "path" => "/ai-gateway/typesafe/v1/systemone", "auth" => "basic", "api_key_env" => "DATABRICKS_TOKEN"
+      "path" => "/ai-gateway/typesafe/v1/systemone", "auth" => "basic", "api_key_env" => "DATABRICKS_TOKEN",
+      "needs" => "api_base (https://<workspace host>) and model (a Unity Catalog name)"
     },
-    "ollama" => { "api_base" => "http://localhost:11434", "batch_size" => "64" },
+    "ollama" => {
+      "api_base" => "http://localhost:11434", "batch_size" => "64", "needs" => "model (a decision model you've pulled)"
+    },
     "llamacpp" => { "api_base" => "http://localhost:8080" },
-    "vllm" => { "api_base" => "http://localhost:8000", "batch_size" => "64" },
-    "litellm" => { "api_base" => "http://localhost:4000", "api_key_env" => "LITELLM_API_KEY" }
-  }.freeze
-
-  # What each preset still needs from you, for `judgelint providers` and errors.
-  PROVIDER_NEEDS = {
-    "foundry" => "api_base (your Foundry resource endpoint) and model (your deployment name)",
-    "databricks" => "api_base (https://<workspace host>) and model (a Unity Catalog name)",
-    "ollama" => "model (a decision model you've pulled)",
-    "vllm" => "model (the model the server runs)",
-    "litellm" => "model (a decision model routed by your proxy)"
+    "vllm" => { "api_base" => "http://localhost:8000", "batch_size" => "64", "needs" => "model (the model the server runs)" },
+    "litellm" => {
+      "api_base" => "http://localhost:4000", "api_key_env" => "LITELLM_API_KEY",
+      "needs" => "model (a decision model routed by your proxy)"
+    }
   }.freeze
 end
