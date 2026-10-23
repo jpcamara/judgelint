@@ -116,15 +116,48 @@ class SpecTest < Minitest::Test
     end
   end
 
-  def test_a_convention_is_asked_whether_the_code_breaks_it
+  def test_a_convention_is_asked_both_ways
     rule = Judgelint::Rule.new({ "convention" => "No fetch outside the Store." }, source: "README.md")
-    window = Judgelint::Question.new(rule, 41, 80)
+    breaks = Judgelint::Question.new(rule, 41, 80)
+    follows = Judgelint::Question.new(rule, 41, 80, inverted: true)
 
-    assert_equal "Do lines 41-80 of the file (the rest is context) break this convention? Answer yes only when " \
-                 "those lines clearly break it, not when it doesn't apply to them. Convention: No fetch outside the Store.",
-                 window.instructions
-    assert_equal "The code clearly breaks the convention.", window.yes_means
-    assert_equal "The code follows the convention, or the convention doesn't apply to it.", window.no_means
+    assert_equal "README.41-80.breaks", breaks.key
+    assert_equal "Do lines 41-80 of the file clearly violate the following team rule? Answer true only when the " \
+                 "code breaks the rule, not when the rule does not apply to it. Rule: No fetch outside the Store.",
+                 breaks.instructions
+    assert_equal ["The code clearly breaks the rule.", "The code follows the rule, or the rule doesn't apply to it."],
+                 [breaks.yes_means, breaks.no_means]
+    assert_equal "Do lines 41-80 of the file follow the following team rule, or does it not apply to them? Answer " \
+                 "false only when those lines clearly break it. Rule: No fetch outside the Store.", follows.instructions
+    assert_equal [breaks.no_means, breaks.yes_means], [follows.yes_means, follows.no_means]
+    assert_in_delta 0.8, breaks.violation(0.8)
+    assert_in_delta 0.2, follows.violation(0.8), 0.001, "yes to \"does it follow\" is no to \"does it break\""
+  end
+
+  def test_violation_and_compliant_lines_are_the_criteria
+    in_project do
+      write("src/README.md", <<~MARKDOWN)
+        ---
+        paths: ["src/*.ts"]
+        ---
+        - **No I/O except through the injected Store.** No timers, no fetch.
+          violation: calls fetch, console, or a timer
+            directly, outside the Store
+          compliant: reads and writes only through the Store it's given
+        - Keep it short.
+      MARKDOWN
+      io, short = discover
+
+      assert_equal "No I/O except through the injected Store. No timers, no fetch.", io.convention
+      assert_equal "calls fetch, console, or a timer directly, outside the Store", io.yes_means
+      assert_equal "reads and writes only through the Store it's given", io.no_means
+      breaks = Judgelint::Question.new(io, 1, 40)
+      follows = Judgelint::Question.new(io, 1, 40, inverted: true)
+      assert_equal [io.yes_means, io.no_means], [breaks.yes_means, breaks.no_means]
+      assert_equal [io.no_means, io.yes_means], [follows.yes_means, follows.no_means]
+      assert_nil short.yes_means
+      assert_includes io.prose, "violation: calls fetch", "the model reads the whole spec, criteria included"
+    end
   end
 
   def test_ignore_keeps_files_out_of_a_check

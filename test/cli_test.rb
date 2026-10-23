@@ -246,6 +246,34 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_a_readme_spec_is_asked_both_ways_with_its_prose
+    in_project do
+      write("app/README.md", <<~MARKDOWN)
+        ---
+        paths: ["app/**/*.rb"]
+        ---
+        # App conventions
+
+        - **No smells.** Code here doesn't smell.
+          violation: it smells
+          compliant: it doesn't
+      MARKDOWN
+      write("app/bad.rb", "SMELL\n")
+      runners.each do |name, run|
+        status, out, = run.call(["app/bad.rb"])
+
+        assert_equal 0, status, name
+        assert_match(%r{\? uncertain\s+app/no-smells\s+1-1\s+0\.50  No smells\.}, out,
+                     "#{name}: yes to breaks (0.9) and to follows (so 0.1 breaks) averages to 0.5")
+      end
+      request = @server.requests.last[:payload]
+      assert_equal %w[app_no_smells.1-1.breaks app_no_smells.1-1.follows], request["questions"].keys
+      assert_includes request["state"]["team_rules"], "# App conventions"
+      assert_equal "it smells", request["questions"]["app_no_smells.1-1.breaks"]["criteria"]["true"]
+      assert_equal "it smells", request["questions"]["app_no_smells.1-1.follows"]["criteria"]["false"]
+    end
+  end
+
   def test_two_models_are_both_asked_and_averaged
     other = StubSystemOne.new(body: { "answers" => { "smell.1-1" => { "type" => "noul", "noul" => 0.5 } } })
     in_smelly_project do

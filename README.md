@@ -63,12 +63,25 @@ excludes: ["src/services/legacy-import.ts"]
 - **No I/O except through the injected Store.** No timers, no fetch, no console.
 ```
 
-The model is asked each bullet as written: "Do lines 1-40 of the file (the
-rest is context) break this convention? Answer yes only when those lines
-clearly break it, not when it doesn't apply to them." It sees the whole file,
-with numbered lines. Rules are named from their lead words
-(`src/services/no-i-o-except-through-the`), and a bullet that says "should"
-or "prefer" is a warning, anything else an error.
+The model reads the spec's prose and the whole file, with numbered lines, and
+is asked each bullet two ways: "Do lines 1-40 of the file clearly violate the
+following team rule?" and "Do they follow it, or does it not apply?" The two
+answers lean opposite ways, so their average is steadier than either. Rules
+are named from their lead words (`src/services/no-i-o-except-through-the`),
+and a bullet that says "should" or "prefer" is a warning, anything else an
+error.
+
+To sharpen a bullet, say what breaking and following it look like, on
+indented lines under it:
+
+```markdown
+- **No I/O except through the injected Store.** No timers, no fetch, no console.
+  violation: calls fetch, console, or a timer directly
+  compliant: reads and writes only through the Store it's given
+```
+
+They make the model more decisive, and like any wording, they're worth
+checking against examples.
 
 | Frontmatter | |
 |---|---|
@@ -155,10 +168,11 @@ by file, question, and model, so an unchanged file costs nothing; commit the
 cache to share it.
 
 **Two models are more certain than one.** On praxis's demo, Jev alone leaves
-17 or 18 findings uncertain; averaging Jev and Cloudflare's Clef leaves 5,
-with the same 12 of 14 violations found and none false, for about a cent a
-run (`models: [typesafe, cloudflare]`). Each model's answers are cached on
-their own, and all of a file's requests go out at once.
+9 to 11 findings uncertain; averaging Jev and Cloudflare's Clef leaves 4, with
+the same 12 of 14 violations found and none false, for $0.02 a run
+(`models: [typesafe, cloudflare]`). Each model's answers are cached on their
+own, and all of a file's requests go out at once. The
+[example](examples/scoop-society) compares the models one at a time.
 
 ### Providers
 

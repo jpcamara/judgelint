@@ -18,11 +18,12 @@ module Judgelint
       attr_accessor :skipped
 
       # The state is built and hashed once: it's the whole file, and every
-      # question's cache key needs its hash.
-      def initialize(source, questions, suppressed, expected: nil)
+      # question's cache key needs its hash. Rules from a spec read its prose
+      # alongside the file, as team_rules.
+      def initialize(source, questions, suppressed, prose: nil, expected: nil)
         @source = source
-        @state = source.state
-        @state_digest = Digest::SHA256.hexdigest(@state)
+        @state = prose ? { "team_rules" => prose, "file" => source.state } : source.state
+        @state_digest = Digest::SHA256.hexdigest(JSON.generate(@state))
         @questions = questions
         @suppressed = suppressed
         @answers = {} # model index => {question key => probability or nil}
@@ -155,16 +156,22 @@ module Judgelint
         if kept.empty?
           suppressed << rule
         else
-          questions[rule] = kept.map { |first, last| Question.new(rule, first, last) }
+          asked = []
+          kept.each do |first, last|
+            asked << Question.new(rule, first, last)
+            asked << Question.new(rule, first, last, inverted: true) if rule.convention
+          end
+          questions[rule] = asked
         end
       end
-      job = Job.new(source, questions, suppressed, expected: expected)
+      job = Job.new(source, questions, suppressed, prose: rules.first&.prose, expected: expected)
       pack(job)
       job
     end
 
+    # Rules that read different context files or spec prose can't share a request.
     def by_context(rules)
-      rules.group_by(&:context).map { |globs, group| yield(Glob.expand(globs), group) }
+      rules.group_by { |rule| [rule.context, rule.prose] }.map { |(globs, _prose), group| yield(Glob.expand(globs), group) }
     end
 
     def touched?(lines, first, last)
@@ -226,12 +233,6 @@ module Judgelint
       end
     end
 
-    # The models' average for a question, or nil if every model refused it.
-    def answer(job, question)
-      values = job.answers.values.map { |answers| answers[question.key] }.compact
-      values.empty? ? nil : values.sum / values.size
-    end
-
     def verdicts(job)
       path = job.source.path
       found = job.questions.map { |rule, questions| verdict_for(rule, path, questions, job) }
@@ -239,17 +240,27 @@ module Judgelint
       job.expected ? found.map { |verdict| verdict.as_example(job.expected) } : found
     end
 
+    # A window's probability of a violation is the average over its questions
+    # (a bullet is asked both ways) and the models; a rule's verdict is its
+    # worst window.
     def verdict_for(rule, path, questions, job)
       return Verdict.new(rule: rule, path: path, probability: nil, status: :skipped) if job.skipped
 
-      answered = questions.filter_map do |question|
-        probability = answer(job, question)
-        [question, probability] unless probability.nil?
+      windows = []
+      questions.group_by { |question| [question.first, question.last] }.each do |(first, last), asked|
+        values = []
+        asked.each do |question|
+          job.answers.each_value do |answers|
+            yes = answers[question.key]
+            values << question.violation(yes) unless yes.nil?
+          end
+        end
+        windows << [first, last, values.sum / values.size] unless values.empty?
       end
-      return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if answered.empty?
+      return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if windows.empty?
 
-      worst, probability = answered.max_by { |_question, value| rule.violation_probability(value) }
-      lines = rule.directory? ? nil : [worst.first, worst.last]
+      first, last, probability = windows.max_by { |window| window[2] }
+      lines = rule.directory? ? nil : [first, last]
       Verdict.classify(rule, path, probability, warn_at: @config.warn_at, lines: lines)
     end
 

@@ -15,16 +15,24 @@ module Judgelint
   #     { ok: false, error } for anything a caller could plausibly cause.
   #   - **No I/O except through the injected Store.** No timers, no fetch.
   #
-  # Each bullet becomes a rule asked as written ("Do these lines break this
-  # convention?"), with an id from its lead words, such as
-  # src/services/domain-failures-are-values-never-exceptions. Files in
-  # .judgelint/rules/ work the same way, and one there with a question: in its
-  # frontmatter is a single rule asked exactly that way.
+  # Each bullet becomes a rule, with an id from its lead words, such as
+  # src/services/domain-failures-are-values-never-exceptions. The model sees
+  # the spec's prose alongside the file, and is asked whether the code breaks
+  # the bullet and whether it follows it. Indented `violation:` and
+  # `compliant:` lines under a bullet say what each looks like:
+  #
+  #   - **No I/O except through the injected Store.**
+  #     violation: calls fetch, console, or a timer directly
+  #     compliant: reads and writes only through the Store it's given
+  #
+  # Files in .judgelint/rules/ work the same way, and one there with a
+  # question: in its frontmatter is a single rule asked exactly that way.
   module Spec
     PATTERNS = ["**/README.md", "**/*.judgelint.md"].freeze
     KEYS = %w[paths excludes context scope cohort type severity threshold].freeze
     COHORTS = { "by_file" => "file", "by_directory" => "directory" }.freeze
     BULLET = /\A(?:[-*+]|\d+[.)])\s+(\S.*)\z/
+    CRITERION = /\A(violation|compliant):\s*(\S.*)\z/i
     LEAD = /\A\*\*(.+?)\*\*/
 
     # +readmes+ false looks in +rules_dir+ alone.
@@ -65,12 +73,16 @@ module Judgelint
       found = bullets(body)
       raise ConfigError, "#{path}: a rule needs a question, or bullets to turn into rules" if found.empty? && required
 
+      prose = body.strip
       ids = []
-      found.map do |text|
+      found.map do |text, criteria|
         id = unique("#{name(path)}/#{slug(text)}", ids)
         rule = shared.merge("id" => id, "convention" => plain(text), "message" => lead(text))
+        rule["yes_means"] = plain(criteria["violation"]) if criteria["violation"]
+        rule["no_means"] = plain(criteria["compliant"]) if criteria["compliant"]
         rule["severity"] = severity(text) unless data.key?("severity")
-        Rule.new(rule, source: path, default_threshold: default_threshold, examples_dir: File.join(".judgelint", "examples", id))
+        Rule.new(rule, source: path, default_threshold: default_threshold, prose: prose,
+                       examples_dir: File.join(".judgelint", "examples", id))
       end
     end
 
@@ -87,11 +99,14 @@ module Judgelint
       settings
     end
 
-    # The top-level bullets of the body, each with its continuation lines and
-    # nested bullets, outside code fences.
+    # The top-level bullets of the body, outside code fences, as [text,
+    # criteria]: the text with its continuation lines and nested bullets, and
+    # any indented violation: or compliant: lines.
     def self.bullets(body)
       found = []
       current = nil
+      criteria = {}
+      criterion = nil
       fenced = false
       body.each_line do |raw|
         line = raw.chomp
@@ -103,17 +118,28 @@ module Judgelint
 
         bullet = BULLET.match(line)
         if bullet
-          found << current if current
+          found << [current, criteria] if current
           current = bullet[1]
+          criteria = {}
+          criterion = nil
         elsif current && line.start_with?(" ", "\t") && !line.strip.empty?
           nested = BULLET.match(line.strip)
-          current = "#{current} #{nested ? nested[1] : line.strip}"
+          text = nested ? nested[1] : line.strip
+          named = CRITERION.match(text)
+          if named
+            criterion = named[1].downcase
+            criteria[criterion] = named[2]
+          elsif criterion
+            criteria[criterion] = "#{criteria[criterion]} #{text}"
+          else
+            current = "#{current} #{text}"
+          end
         elsif current && !line.strip.empty?
-          found << current
+          found << [current, criteria]
           current = nil
         end
       end
-      found << current if current
+      found << [current, criteria] if current
       found
     end
 

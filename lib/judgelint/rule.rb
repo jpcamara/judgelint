@@ -31,7 +31,7 @@ module Judgelint
     KEYS = %w[id question convention yes_means no_means fail_when scope paths excludes context severity threshold message].freeze
 
     attr_reader :id, :question, :convention, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes,
-                :context, :severity, :threshold, :message, :source, :examples_dir
+                :context, :severity, :threshold, :message, :source, :examples_dir, :prose
 
     # The rules in +dir+ alone (Spec.discover also finds READMEs).
     def self.load_dir(dir, default_threshold:)
@@ -40,7 +40,8 @@ module Judgelint
 
     # A rule is a question asked exactly as written, or a convention (a
     # spec's bullet) asked whether the code breaks it.
-    def initialize(data, source:, body: "", default_threshold: 0.7, examples_dir: nil)
+    # +prose+ is a spec's body, which the model reads alongside the file.
+    def initialize(data, source:, body: "", default_threshold: 0.7, examples_dir: nil, prose: nil)
       unknown = data.keys - KEYS
       raise ConfigError, "#{source}: unknown keys #{unknown.join(', ')}" unless unknown.empty?
 
@@ -51,6 +52,7 @@ module Judgelint
       raise ConfigError, "#{source}: a rule needs a question" if @question.nil? && @convention.nil?
 
       @examples_dir = examples_dir || source.delete_suffix(".md")
+      @prose = prose
       @yes_means = text(data["yes_means"])
       @no_means = text(data["no_means"])
       @fail_when = one_of("fail_when", yes_or_no(data.fetch("fail_when", "yes")), %w[yes no])

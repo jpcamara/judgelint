@@ -29,8 +29,8 @@ module Judgelint
       Verdict.new(rule: rule, path: path, probability: probability, status: status, lines: lines, expected: expected)
     end
 
-    def self.classify(rule, path, yes_probability, warn_at:, lines: nil)
-      probability = rule.violation_probability(yes_probability)
+    # +probability+ is the probability the code breaks the rule.
+    def self.classify(rule, path, probability, warn_at:, lines: nil)
       status =
         if probability >= rule.threshold then :violation
         elsif probability >= warn_at then :uncertain

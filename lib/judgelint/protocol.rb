@@ -39,8 +39,10 @@ module Judgelint
     # OpenAI's Decisions API: questions are a list with names, yes/no is
     # "predicate" with no criteria field, and answers come back as a list.
     module Decisions
+      # Decisions' input is text, so a structured state goes as its JSON.
       def self.payload(model, state, questions)
-        { "model" => model, "input" => state, "questions" => questions.map { |question| render(question) } }
+        input = state.is_a?(String) ? state : JSON.generate(state)
+        { "model" => model, "input" => input, "questions" => questions.map { |question| render(question) } }
       end
 
       # Criteria become lines of the instructions, as RubyLLM and LiteLLM do.

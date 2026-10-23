@@ -194,6 +194,22 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_a_bullet_is_asked_both_ways_with_the_specs_prose
+    in_project do
+      write("app/a.rb", "x\n")
+      rule = Judgelint::Rule.new({ "convention" => "No smells.", "paths" => ["app/**/*.rb"] },
+                                 source: "app/README.md", prose: "# Conventions\n\n- No smells.")
+      client = FakeClient.new { |_state, question| question.key.end_with?(".breaks") ? 0.6 : 0.2 }
+      verdict = judge([rule], client, ["app/a.rb"]).first
+
+      state, keys = client.calls.first
+      assert_equal %w[README.1-1.breaks README.1-1.follows], keys
+      assert_equal({ "team_rules" => "# Conventions\n\n- No smells.", "file" => "Path: app/a.rb\n\n1: x\n" }, state)
+      assert_in_delta 0.7, verdict.probability, 0.001, "breaks 0.6 and follows 0.2 (so breaks 0.8), averaged"
+      assert_equal :violation, verdict.status
+    end
+  end
+
   def test_every_model_is_asked_and_their_answers_averaged
     in_project do
       write("app/a.rb", "x\n" * 50)

@@ -28,8 +28,8 @@ ignores underscore files and generated files, as praxis does.
 | Violations praxis recorded, plus one it missed | 14 |
 | Found by judgelint | 12 |
 | Found by judgelint and not expected | 0 |
-| Uncertain findings (reported, never failing) | 17 or 18 |
-| Cost of a run | 20 requests, about 38,000 input tokens, $0.0016 |
+| Uncertain findings (reported, never failing) | 9 to 11 |
+| Cost of a run | 20 requests, about 63,000 input tokens, $0.0026 |
 
 The one praxis missed: `update-parlor-hours.ts` builds `summary` and `label`
 (lines 11-13) before it validates anything, which breaks "input is validated
@@ -45,17 +45,40 @@ The two judgelint misses, both in `src/features/flavor-of-day`:
   the feature's earlier rotation, so whether it's a second capability is
   arguable.
 
-When a bullet needs more than the model can do, write that one rule as a
-precise question with criteria (see the main README's "Precise rules"). An
-earlier version of this example wrote 13 of praxis's conventions that way, by
-hand, and found all 13 violations it was checked against, the orphaned file
-included. Asking the bullets as written gets 12 of 14 with nothing to write.
+When a bullet needs more than the model can do, give it criteria, or write
+that one rule as a precise question (see the main README). An earlier version
+of this example wrote 13 of praxis's conventions as questions, by hand, and
+found all 13 violations it was checked against, the orphaned file included.
 
-Most uncertain findings come from bullets that bundle several requirements,
-like the service entry-point bullet, where the model is less sure. Asking a
-second model and averaging helps: with `models: [typesafe, cloudflare]`, the
-same 12 violations are found, none false, and 5 findings are uncertain, for
-$0.0115 a run.
+## Models, one at a time
+
+The same specs on each model, once as praxis wrote them and once with
+`violation:` and `compliant:` lines added under every bullet (written for
+this comparison, general rather than aimed at this code; not committed).
+"Arguable" extras are violations praxis didn't record that a reader could
+call either way: `awards` names its types file `award-types.ts` rather than
+`awards-types.ts`, `parlor.ts` both ranks and formats, and `apply-refund.ts`
+reads the store before checking the amount.
+
+| Model | As written: found, extras, uncertain | With criteria: found, extras (arguable), uncertain | Cost |
+|---|---|---|---|
+| Jev (`typesafe`) | 12, 0, 10 | 13, 3 (2), 7 | $0.003 |
+| Jev 1.14 (`typesafe:jev-preview`) | 12, 1, 12 | 13, 3 (2), 7 | $0.003 |
+| Jev via `openrouter` | 12, 0, 10 | 13, 0, 8 | $0.003 |
+| Clef (`cloudflare`) | 11, 0, 4 | 13, 2 (1), 5 | $0.02 |
+| Clef Flash | 8, 3, 13 | 11, 8 (1), 15 | |
+| Celeris 1.0 | 7, 0, 5 | 13, 3 (1), 2 | $0.003 |
+| Celeris 1.1 | 6, 0, 6 | 13, 3 (1), 2 | |
+| GPT-6 Luna (`openai`) | 13, 11, 6 | 14, 8 (2), 9 | $0.01 |
+| Kev 4B | 6, 2, 21 | 11, 3, 17 | $0.003 |
+| Jev and Clef averaged | 12, 0, 4 | 13, 1 (1), 8 | $0.02 |
+
+One run each (two for Jev as written), out of 14 expected violations.
+Criteria help most where a model is unsure what a bullet means: Celeris goes
+from 7 to 13 found. They cost precision when they're loose; the extras that
+aren't arguable are a criterion's wording read more broadly than meant, which
+is what examples are for. Jev as written, with no criteria and no second
+model, finds 12 with none extra; that's what this example records.
 
 ## Running it
 
