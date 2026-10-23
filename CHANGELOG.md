@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.1.0 (2026-10-23)
 
 - Specs as praxis reads them: a README (or `*.judgelint.md`) with `paths:`
   frontmatter, each top-level bullet a rule. The model reads the spec's prose
