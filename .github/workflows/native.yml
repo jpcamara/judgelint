@@ -21,13 +21,13 @@ jobs:
       matrix:
         include:
           - { os: macos-14, platform: arm64-darwin }
-          - { os: macos-13, platform: x86_64-darwin }
+          - { os: macos-15-intel, platform: x86_64-darwin }
           - { os: ubuntu-22.04, platform: x86_64-linux }
           - { os: ubuntu-22.04-arm, platform: aarch64-linux }
     env:
       # The oldest macOS the binary runs on; Homebrew's OpenSSL on these
       # runners is built for the runner's own release.
-      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-13' && '13.0' || '14.0' }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-15-intel' && '15.0' || '14.0' }}
     steps:
       - uses: actions/checkout@v4
 

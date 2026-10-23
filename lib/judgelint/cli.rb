@@ -2,7 +2,8 @@
 
 module Judgelint
   # Command line entry point. Exit codes: 0 clean, 1 violations (or missed
-  # examples for `test`), 2 usage or configuration error.
+  # examples for `test`), 2 usage or configuration error. Everything that can
+  # be checked is checked before the first paid request.
   class CLI
     COMMANDS = %w[check test rules providers init].freeze
 
@@ -22,12 +23,17 @@ module Judgelint
         init               Write .judgelint.yml and an example rule.
 
       Options:
+            --base REF       Check only what changed since the merge base with REF,
+                             uncommitted work included
+            --pr             --base the pull request's base branch, from CI variables
+                             or the gh CLI
+        -f, --format FORMAT  text, json, github (Actions annotations), or sarif
         -c, --config PATH    Config file (default .judgelint.yml)
-        -f, --format FORMAT  text or json
             --provider NAME  A provider from `judgelint providers` (default typesafe)
             --model ID       Decision model id
             --threshold N    Violation probability that counts as a violation (default 0.7)
             --no-cache       Ask the model even when an answer is cached
+        -y, --yes            Run even past max_cost_usd or full_run_limit
         -v, --version        Print the version
         -h, --help           Print this help
 
@@ -40,7 +46,11 @@ module Judgelint
       @err = err
       @format = "text"
       @config_path = nil
+      @base = nil
+      @pr = false
+      @yes = false
       @overrides = {}
+      @usage = nil
     end
 
     def run
@@ -61,6 +71,8 @@ module Judgelint
       2
     rescue Error => e
       @err.puts "judgelint: #{e.message}"
+      # Requests that succeeded before the failure are still billed.
+      @err.puts @usage.line if @usage && @usage.requests.positive?
       2
     end
 
@@ -68,7 +80,7 @@ module Judgelint
 
     # Spinel can't compile OptionParser, so the few options are parsed here.
     VALUE_OPTIONS = {
-      "-c" => "config", "--config" => "config", "-f" => "format", "--format" => "format",
+      "-c" => "config", "--config" => "config", "-f" => "format", "--format" => "format", "--base" => "base",
       "--provider" => "provider", "--model" => "model", "--threshold" => "threshold"
     }.freeze
 
@@ -87,6 +99,10 @@ module Judgelint
           set_option(VALUE_OPTIONS.fetch(name), value)
         elsif arg == "--no-cache"
           @overrides["cache"] = false
+        elsif arg == "--pr"
+          @pr = true
+        elsif %w[-y --yes].include?(arg)
+          @yes = true
         elsif %w[-v --version -h --help].include?(arg)
           @out.puts(%w[-v --version].include?(arg) ? "judgelint #{VERSION}" : HELP)
           @done = true
@@ -102,8 +118,9 @@ module Judgelint
     def set_option(key, value)
       case key
       when "config" then @config_path = value
+      when "base" then @base = value
       when "format"
-        raise UsageError, "--format is text or json, not #{value}" unless %w[text json].include?(value)
+        raise UsageError, "--format is #{Reporter::FORMATS.join(', ')}, not #{value}" unless Reporter::FORMATS.include?(value)
 
         @format = value
       else @overrides[key] = value
@@ -112,14 +129,38 @@ module Judgelint
 
     def check
       config, rules = load_rules
-      paths = @argv.empty? ? Glob.expand(rules.flat_map(&:paths)) : Glob.expand_arguments(@argv)
-      missing = paths.reject { |path| File.file?(path) }
-      raise ConfigError, "No such file: #{missing.join(', ')}" unless missing.empty?
+      raise UsageError, "--base and --pr don't go together" if @base && @pr
 
-      paths = paths.select { |path| rules.any? { |rule| rule.applies_to?(path) } }
-      verdicts = runner(config, rules).run(paths)
-      Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: paths.size)
+      base = @pr ? Changes.pr_base : @base
+      changes = base ? Changes.since(base) : nil
+      paths = check_paths(config, rules, changes)
+      runner = runner(config, rules)
+      jobs = runner.plan(paths, changes: changes)
+      guard_cost(config, runner, jobs)
+      verdicts = runner.execute(jobs).flatten
+      Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: paths.size, usage: @usage)
+      @err.puts @usage.line
       verdicts.any?(&:failing?) ? 1 : 0
+    end
+
+    def check_paths(config, rules, changes)
+      if !@argv.empty?
+        paths = Glob.expand_arguments(@argv)
+        missing = paths.reject { |path| File.file?(path) }
+        raise ConfigError, "No such file: #{missing.join(', ')}" unless missing.empty?
+
+        paths = paths.select { |path| changes.key?(path) } if changes
+      elsif changes
+        paths = changes.keys.sort.select { |path| File.file?(path) }
+      else
+        paths = Glob.expand(rules.flat_map(&:paths))
+      end
+      paths = paths.select { |path| rules.any? { |rule| rule.applies_to?(path) } }
+      if @argv.empty? && changes.nil? && paths.size > config.full_run_limit && !@yes
+        raise ConfigError, "That's #{paths.size} files, over full_run_limit (#{config.full_run_limit}). " \
+                           "Check a change with --base or --pr, name paths, or pass --yes."
+      end
+      paths
     end
 
     def test
@@ -131,14 +172,23 @@ module Judgelint
         rules = rules.select { |rule| @argv.include?(rule.id) }
       end
 
-      examples = runner(config, rules).examples
-      if examples.empty?
-        @err.puts "No examples found. Add files under <rules>/<id>/pass and <rules>/<id>/fail."
-        return 0
-      end
-
-      Reporter.new(@out, format: @format).fixtures(examples)
+      runner = runner(config, rules)
+      jobs = runner.plan_examples
+      guard_cost(config, runner, jobs)
+      examples = runner.execute(jobs).flatten
+      Reporter.new(@out, format: @format).fixtures(examples, usage: @usage)
+      @err.puts @usage.line
       examples.all?(&:correct?) ? 0 : 1
+    end
+
+    # Prices the planned requests and refuses a run over max_cost_usd.
+    def guard_cost(config, runner, jobs)
+      estimate = Usage.estimate(runner.estimated_tokens(jobs), config.price_per_million)
+      return if estimate.nil? || estimate <= config.max_cost_usd || @yes
+
+      raise ConfigError, format("This run would send %d requests, about %s input tokens ($%.2f), over max_cost_usd " \
+                                "($%.2f). Pass --yes to run it anyway.", runner.request_count(jobs),
+                                Usage.delimit(runner.estimated_tokens(jobs)), estimate, config.max_cost_usd)
     end
 
     def list_rules
@@ -172,7 +222,9 @@ module Judgelint
     end
 
     def runner(config, rules)
-      Runner.new(config: config, rules: rules, client: Client.new(config), cache: Cache.new(config.cache_path))
+      client = Client.new(config)
+      @usage = client.usage
+      Runner.new(config: config, rules: rules, client: client, cache: Cache.new(config.cache_path))
     end
   end
 end

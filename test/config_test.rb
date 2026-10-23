@@ -69,6 +69,10 @@ class ConfigTest < Minitest::Test
     assert_equal ["system_one", "basic", 8], [databricks.protocol, databricks.auth, databricks.batch_size]
   end
 
+  def test_numbers_in_exponent_form
+    assert_in_delta 1.0e-07, config(max_cost_usd: 0.0000001).max_cost_usd
+  end
+
   def test_variables_are_left_for_the_client_to_expand
     assert_includes config(provider: "cloudflare").api_base, "${CLOUDFLARE_ACCOUNT_ID}"
   end

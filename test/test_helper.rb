@@ -68,18 +68,24 @@ class StubSystemOne
   end
 end
 
-# Answers from a table instead of a model, and counts calls.
+# Answers from a block instead of a model, and records each request as
+# [state, question keys].
 class FakeClient
   attr_reader :calls
 
   def initialize(&answer)
     @answer = answer
     @calls = []
+    @lock = Mutex.new
   end
 
-  def judge(state, rules)
-    @calls << [state, rules.map(&:id)]
-    rules.to_h { |rule| [rule.question_key, @answer.call(state, rule)] }
+  def judge(state, questions)
+    @lock.synchronize { @calls << [state, questions.map(&:key)] }
+    questions.to_h { |question| [question.key, @answer.call(state, question)] }
+  end
+
+  def tokens(state, questions)
+    JSON.generate(Judgelint::Protocol::SystemOne.payload("m", state, questions)).bytesize / 3
   end
 end
 

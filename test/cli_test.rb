@@ -23,12 +23,13 @@ class CLITest < Minitest::Test
   def test_check_reports_violations_and_exits_one
     in_smelly_project do
       runners.each do |name, run|
-        status, out, = run.call(["check"])
+        status, out, err = run.call(["check"])
 
         assert_equal 1, status, name
-        assert_match(%r{^app/bad\.rb\n  x error\s+smell\s+0\.90  Smelly code is hard to change\.$}, out, name)
+        assert_match(%r{^app/bad\.rb\n  x error\s+smell\s+1-1\s+0\.90  Smelly code is hard to change\.$}, out, name)
         refute_match(/good\.rb/, out, name)
         assert_match(/^2 files, 1 violations$/, out, name)
+        assert_match(/^judgelint: 2 requests, [\d,]+ input tokens, \$\d/, err, name)
       end
     end
   end
@@ -39,9 +40,11 @@ class CLITest < Minitest::Test
         _status, out, = run.call(["check", "--format", "json", "app/bad.rb"])
         data = JSON.parse(out)
 
-        assert_equal({ "violation" => 1, "uncertain" => 0, "pass" => 0, "skipped" => 0, "refused" => 0 },
-                     data["summary"], name)
+        assert_equal({ "violation" => 1, "uncertain" => 0, "pass" => 0, "skipped" => 0, "refused" => 0,
+                       "suppressed" => 0 }, data["summary"], name)
+        assert_equal 1, data["usage"]["requests"], name
         assert_equal "smell", data["results"].first["rule"], name
+        assert_equal [1, 1], data["results"].first["lines"], name
         assert_in_delta 0.9, data["results"].first["probability"], 0.001, name
       end
     end
@@ -92,7 +95,8 @@ class CLITest < Minitest::Test
   def test_api_errors_exit_two
     in_smelly_project do
       runners.each do |name, run|
-        status, _out, err = run.call(["--model", "x", "app/bad.rb"], api_base: "http://127.0.0.1:1")
+        status, _out, err = run.call(["--model", "x", "app/bad.rb"], api_base: "http://127.0.0.1:1",
+                                                                     settings: "retries: 0")
         assert_equal 2, status, name
         assert_match(/judgelint: /, err, name)
       end
@@ -112,7 +116,7 @@ class CLITest < Minitest::Test
   end
 
   def test_cloudflare_envelope_and_account_in_the_url
-    wrapped = { "result" => { "answers" => { "smell" => { "type" => "noul", "noul" => 0.95 } } }, "success" => true }
+    wrapped = { "result" => { "answers" => { "smell.1-1" => { "type" => "noul", "noul" => 0.95 } } }, "success" => true }
     server = StubSystemOne.new(body: wrapped)
     in_smelly_project do
       runners.each do |name, run|
@@ -143,7 +147,7 @@ class CLITest < Minitest::Test
   end
 
   def test_retries_then_succeeds
-    ok = { "answers" => { "smell" => { "type" => "noul", "noul" => 0.1 } } }
+    ok = { "answers" => { "smell.1-1" => { "type" => "noul", "noul" => 0.1 } } }
     in_smelly_project do
       runners.each do |name, run|
         server = StubSystemOne.new(responses: [[429, { "detail" => "slow" }, { "Retry-After" => "0" }], [200, ok]])
@@ -155,6 +159,116 @@ class CLITest < Minitest::Test
       ensure
         server&.stop
       end
+    end
+  end
+
+  def test_base_checks_only_what_changed
+    in_smelly_project do
+      git_repo
+      write("app/bad.rb", "fine\nSMELL\n")
+      write("app/new.rb", "SMELL\n")
+      runners.each do |name, run|
+        status, out, = run.call(["--base", "main"])
+
+        assert_equal 1, status, name
+        assert_match(%r{^app/bad\.rb\n  x error\s+smell\s+1-2 }, out, name)
+        assert_match(%r{^app/new\.rb\n}, out, name)
+        assert_match(/^2 files, 2 violations$/, out, name)
+      end
+      assert(@server.requests.none? { |request| request[:payload]["state"].include?("app/good.rb") })
+    end
+  end
+
+  def test_pr_finds_the_base_branch_and_fetches_it
+    in_smelly_project do |dir|
+      git_repo
+      git("init", "--bare", "-q", "#{dir}/origin.git")
+      git("remote", "add", "origin", "#{dir}/origin.git")
+      git("push", "-q", "origin", "main")
+      write("app/good.rb", "SMELL\n")
+      runners.each do |name, run|
+        status, out, = run.call(["--pr"], extra_env: { "GITHUB_BASE_REF" => "main" })
+
+        assert_equal 1, status, name
+        assert_match(/^1 file, 1 violations$/, out, name)
+      end
+    end
+  end
+
+  def test_bad_refs_are_refused_before_git_runs
+    in_smelly_project do
+      runners.each do |name, run|
+        status, _out, err = run.call(["--base", "--upload-pack=x"])
+        assert_equal 2, status, name
+        assert_match(/Not a usable git ref/, err, name)
+
+        status, _out, err = run.call(["--base", "main..HEAD"])
+        assert_equal 2, status, name
+        assert_match(/Not a usable git ref/, err, name)
+      end
+    end
+  end
+
+  def test_github_annotations
+    in_smelly_project do
+      runners.each do |name, run|
+        _status, out, = run.call(["--format", "github"])
+        assert_equal "::error file=app/bad.rb,line=1,endLine=1,title=judgelint smell::Smelly code is hard to change. (0.90)\n",
+                     out, name
+      end
+    end
+  end
+
+  def test_sarif
+    in_smelly_project do
+      runners.each do |name, run|
+        _status, out, = run.call(["--format", "sarif"])
+        result = JSON.parse(out)["runs"].first["results"].first
+
+        assert_equal "smell", result["ruleId"], name
+        assert_equal "error", result["level"], name
+        assert_equal({ "uri" => "app/bad.rb" }, result["locations"].first["physicalLocation"]["artifactLocation"], name)
+        assert_equal({ "startLine" => 1, "endLine" => 1 }, result["locations"].first["physicalLocation"]["region"], name)
+      end
+    end
+  end
+
+  def test_refuses_a_run_over_max_cost_before_sending
+    in_smelly_project do
+      runners.each do |name, run|
+        status, _out, err = run.call([], settings: "max_cost_usd: 0.0000001")
+        assert_equal 2, status, name
+        assert_match(/This run would send 2 requests, .* over max_cost_usd/, err, name)
+
+        status, = run.call(["--yes"], settings: "max_cost_usd: 0.0000001")
+        assert_equal 1, status, name
+      end
+      assert_equal runners.size * 2, @server.requests.size
+    end
+  end
+
+  def test_full_run_limit
+    in_smelly_project do
+      runners.each do |name, run|
+        status, _out, err = run.call([], settings: "full_run_limit: 1")
+        assert_equal 2, status, name
+        assert_match(/That's 2 files, over full_run_limit \(1\)/, err, name)
+
+        status, = run.call(["app/bad.rb", "app/good.rb"], settings: "full_run_limit: 1")
+        assert_equal 1, status, name
+      end
+    end
+  end
+
+  def test_test_needs_examples_for_every_rule
+    in_smelly_project do
+      write(".judgelint/rules/smell/fail/bad.rb", "SMELL")
+      runners.each do |name, run|
+        status, _out, err = run.call(["test"])
+        assert_equal 2, status, name
+        assert_match(%r{needs pass and fail examples; add some to \.judgelint/rules/smell/pass/}, err, name)
+      end
+      assert_empty @server.requests
     end
   end
 
@@ -239,18 +353,30 @@ class CLITest < Minitest::Test
     { "JUDGELINT_TEST_KEY" => "secret" }
   end
 
-  def run_in_process(args, api_base: @server.base, settings: "")
-    ENV.update(env(api_base, settings))
+  def run_in_process(args, api_base: @server.base, settings: "", extra_env: {})
+    ENV.update(env(api_base, settings).merge(extra_env))
     out = StringIO.new
     err = StringIO.new
     status = Judgelint::CLI.new(args, out: out, err: err).run
     [status, out.string, err.string]
   ensure
-    ENV.delete("JUDGELINT_TEST_KEY")
+    (["JUDGELINT_TEST_KEY"] + extra_env.keys).each { |key| ENV.delete(key) }
   end
 
-  def run_command(command, args, api_base: @server.base, settings: "")
-    out, err, status = Open3.capture3(env(api_base, settings), *command, *args)
+  def run_command(command, args, api_base: @server.base, settings: "", extra_env: {})
+    out, err, status = Open3.capture3(env(api_base, settings).merge(extra_env), *command, *args)
     [status.exitstatus, out, err]
+  end
+
+  # Commits the project on main, as a repository judgelint can diff against.
+  def git_repo
+    git("init", "-q", "-b", "main")
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "start")
+  end
+
+  def git(*args)
+    _out, err, status = Open3.capture3("git", *args)
+    raise "git #{args.join(' ')}: #{err}" unless status.success?
   end
 end

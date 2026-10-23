@@ -5,14 +5,20 @@ require "yaml"
 require "digest"
 require "fileutils"
 require "net/https"
+require "open3"
 
 require_relative "judgelint/version"
 require_relative "judgelint/errors"
 require_relative "judgelint/glob"
 require_relative "judgelint/rule"
+require_relative "judgelint/source"
+require_relative "judgelint/question"
+require_relative "judgelint/changes"
 require_relative "judgelint/providers"
 require_relative "judgelint/config"
 require_relative "judgelint/cache"
+require_relative "judgelint/usage"
+require_relative "judgelint/pool"
 require_relative "judgelint/verdict"
 require_relative "judgelint/protocol"
 require_relative "judgelint/client"
@@ -24,7 +30,7 @@ require_relative "judgelint/cli"
 # Lints files against conventions that only a reader can check. Each rule is a
 # yes/no question that a System One decision model answers with a probability.
 module Judgelint
-  NUMBER = /\A-?\d+(?:\.\d+)?\z/
+  NUMBER = /\A-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?\z/
 
   # Float(), without the rescue: answers nil for anything that isn't a number.
   def self.number(value)

@@ -11,7 +11,9 @@ module Judgelint
     # system's bundle: macOS and Alpine, Debian and Ubuntu, then Fedora and RHEL.
     CA_BUNDLES = %w[/etc/ssl/cert.pem /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt].freeze
 
-    def initialize(config, sleeper: ->(seconds) { sleep(seconds) })
+    attr_reader :usage
+
+    def initialize(config, usage: Usage.new(config.price_per_million), sleeper: ->(seconds) { sleep(seconds) })
       if RUBY_ENGINE == "spinel" && ENV.fetch("SSL_CERT_FILE", "").empty?
         bundle = CA_BUNDLES.find { |path| File.file?(path) }
         ENV["SSL_CERT_FILE"] = bundle if bundle
@@ -20,15 +22,26 @@ module Judgelint
       @protocol = Protocol::ALL.fetch(config.protocol) do
         raise ConfigError, "protocol is system_one or decisions, not #{config.protocol}"
       end
+      @usage = usage
       @sleeper = sleeper
       check_settings
     end
 
-    # Returns the probability of "yes" for each rule, keyed by question_key,
+    # Returns the probability of "yes" for each question, keyed by its key,
     # or nil for a question the model refused.
-    def judge(state, rules)
-      body = @protocol.payload(@config.model, state, rules).merge(@config.provider_options)
-      @protocol.parse(self.class.unwrap(post(JSON.generate(body))), rules)
+    def judge(state, questions)
+      data = self.class.unwrap(post(JSON.generate(payload(state, questions))))
+      @usage.record(data)
+      @protocol.parse(data, questions)
+    end
+
+    def payload(state, questions)
+      @protocol.payload(@config.model, state, questions).merge(@config.provider_options)
+    end
+
+    # A conservative token count for code: three bytes a token.
+    def tokens(state, questions)
+      JSON.generate(payload(state, questions)).bytesize / 3
     end
 
     def url
@@ -96,7 +109,9 @@ module Judgelint
       attempt = 0
       loop do
         attempt += 1
-        response = request(body)
+        response = request(body, attempt)
+        next if response.nil?
+
         code = response.code
         return parse_json(response.body.to_s) if code.start_with?("2")
 
@@ -109,7 +124,8 @@ module Judgelint
       end
     end
 
-    def request(body)
+    # Answers nil after a connection error that's worth another try.
+    def request(body, attempt)
       uri = URI(url)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
@@ -126,7 +142,10 @@ module Judgelint
     rescue Judgelint::Error
       raise
     rescue StandardError => e
-      raise ApiError, "Couldn't reach #{@config.provider} at #{url}: #{e.message}"
+      raise ApiError, "Couldn't reach #{@config.provider} at #{url}: #{e.message}" if attempt > @config.retries
+
+      @sleeper.call(2.0**attempt)
+      nil
     end
 
     def authorize(request)

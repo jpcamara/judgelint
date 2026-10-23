@@ -1,29 +1,29 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # Prints results. Data goes to stdout; anything else goes to stderr.
+  # Prints results as text, JSON, GitHub Actions annotations, or SARIF. Data
+  # goes to stdout; anything else goes to stderr.
   class Reporter
-    MARKS = { violation: "x", uncertain: "?", skipped: "-", refused: "-" }.freeze
+    FORMATS = %w[text json github sarif].freeze
+    MARKS = { violation: "x", uncertain: "?", skipped: "-", refused: "-", suppressed: "-" }.freeze
+    STATUSES = %w[violation uncertain pass skipped refused suppressed].freeze
 
     def initialize(out, format:)
       @out = out
       @format = format
     end
 
-    def check(verdicts, config:, file_count:)
-      return json(check_json(verdicts, config, file_count)) if @format == "json"
-
-      shown = verdicts.reject { |verdict| verdict.status == :pass }
-      shown.group_by(&:path).each do |path, group|
-        @out.puts path
-        group.each { |verdict| @out.puts "  #{line(verdict)}" }
+    def check(verdicts, config:, file_count:, usage:)
+      case @format
+      when "json" then json(check_json(verdicts, config, file_count, usage))
+      when "github" then verdicts.each { |verdict| annotate(verdict) }
+      when "sarif" then json(sarif(verdicts))
+      else text(verdicts, file_count)
       end
-      @out.puts "" unless shown.empty?
-      @out.puts summary(verdicts, file_count)
     end
 
-    def fixtures(examples)
-      return json(fixtures_json(examples)) if @format == "json"
+    def fixtures(examples, usage:)
+      return json(fixtures_json(examples, usage)) if @format == "json"
 
       examples.group_by(&:rule).each do |rule, group|
         correct = group.count(&:correct?)
@@ -33,9 +33,8 @@ module Judgelint
           @out.puts format("  %-4s %-4s %s  %s", mark, example.expected, probability(example), example.path)
         end
       end
-      correct = examples.count(&:correct?)
       @out.puts "" unless examples.empty?
-      @out.puts "#{correct}/#{examples.size} examples judged correctly"
+      @out.puts "#{examples.count(&:correct?)}/#{examples.size} examples judged correctly"
     end
 
     private
@@ -44,10 +43,24 @@ module Judgelint
       @out.puts JSON.pretty_generate(data)
     end
 
+    def text(verdicts, file_count)
+      shown = verdicts.reject { |verdict| verdict.status == :pass }
+      shown.group_by(&:path).each do |path, group|
+        @out.puts path
+        group.each { |verdict| @out.puts "  #{line(verdict)}" }
+      end
+      @out.puts "" unless shown.empty?
+      @out.puts summary(verdicts, file_count)
+    end
+
     def line(verdict)
       label = verdict.status == :violation ? verdict.rule.severity : verdict.status.to_s
-      format("%s %-9s %-24s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
-             probability(verdict), verdict.rule.message)
+      format("%s %-10s %-24s %-9s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
+             range(verdict), probability(verdict), verdict.rule.message)
+    end
+
+    def range(verdict)
+      verdict.lines ? verdict.lines.join("-") : ""
     end
 
     def probability(verdict)
@@ -58,31 +71,75 @@ module Judgelint
 
     def summary(verdicts, file_count)
       counts = verdicts.group_by(&:status).transform_values(&:size)
-      parts = ["#{file_count} #{file_count == 1 ? 'file' : 'files'}"]
-      parts << "#{counts.fetch(:violation, 0)} violations"
+      parts = ["#{file_count} #{file_count == 1 ? 'file' : 'files'}", "#{counts.fetch(:violation, 0)} violations"]
       parts << "#{counts[:uncertain]} uncertain" if counts[:uncertain]
       parts << "#{counts[:skipped]} skipped (too large)" if counts[:skipped]
       parts << "#{counts[:refused]} refused by the model" if counts[:refused]
+      parts << "#{counts[:suppressed]} suppressed" if counts[:suppressed]
       parts.join(", ")
     end
 
-    def check_json(verdicts, config, file_count)
+    def check_json(verdicts, config, file_count, usage)
       counts = verdicts.group_by(&:status).transform_values(&:size)
       {
         "version" => VERSION,
         "model" => config.model_label,
         "files" => file_count,
-        "summary" => %w[violation uncertain pass skipped refused].to_h { |status| [status, counts.fetch(status.to_sym, 0)] },
+        "summary" => STATUSES.to_h { |status| [status, counts.fetch(status.to_sym, 0)] },
+        "usage" => usage.to_h,
         "results" => verdicts.map(&:to_h)
       }
     end
 
-    def fixtures_json(examples)
+    def fixtures_json(examples, usage)
       {
         "version" => VERSION,
         "correct" => examples.count(&:correct?),
         "total" => examples.size,
+        "usage" => usage.to_h,
         "examples" => examples.map(&:to_h)
+      }
+    end
+
+    # GitHub Actions workflow commands, which show up on the pull request's lines.
+    def annotate(verdict)
+      level = { violation: verdict.rule.error? ? "error" : "warning", uncertain: "notice" }[verdict.status]
+      return unless level
+
+      properties = ["file=#{escape(verdict.path, true)}"]
+      properties += ["line=#{verdict.lines[0]}", "endLine=#{verdict.lines[1]}"] if verdict.lines
+      properties << "title=#{escape("judgelint #{verdict.rule.id}", true)}"
+      @out.puts "::#{level} #{properties.join(',')}::#{escape("#{verdict.rule.message} (#{probability(verdict)})", false)}"
+    end
+
+    def escape(text, property)
+      escaped = text.gsub("%", "%25").gsub("\r", "%0D").gsub("\n", "%0A")
+      property ? escaped.gsub(":", "%3A").gsub(",", "%2C") : escaped
+    end
+
+    def sarif(verdicts)
+      shown = verdicts.select { |verdict| %i[violation uncertain].include?(verdict.status) }
+      rules = shown.map(&:rule).uniq
+      {
+        "$schema" => "https://json.schemastore.org/sarif-2.1.0.json",
+        "version" => "2.1.0",
+        "runs" => [{
+          "tool" => { "driver" => {
+            "name" => "judgelint", "version" => VERSION, "informationUri" => "https://github.com/jpcamara/judgelint",
+            "rules" => rules.map { |rule| { "id" => rule.id, "shortDescription" => { "text" => rule.message } } }
+          } },
+          "results" => shown.map { |verdict| sarif_result(verdict) }
+        }]
+      }
+    end
+
+    def sarif_result(verdict)
+      region = verdict.lines ? { "startLine" => verdict.lines[0], "endLine" => verdict.lines[1] } : {}
+      level = verdict.status == :uncertain ? "note" : (verdict.rule.error? ? "error" : "warning")
+      {
+        "ruleId" => verdict.rule.id, "level" => level,
+        "message" => { "text" => "#{verdict.rule.message} (#{probability(verdict)})" },
+        "locations" => [{ "physicalLocation" => { "artifactLocation" => { "uri" => verdict.path }, "region" => region } }]
       }
     end
   end

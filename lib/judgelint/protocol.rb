@@ -2,35 +2,35 @@
 
 module Judgelint
   # The two request shapes decision models are served with. judgelint asks only
-  # yes/no questions, so each renders a rule as that protocol's yes/no type
-  # and reads back the probability of yes. A nil probability is a refusal.
+  # yes/no questions, so each renders a Question as that protocol's yes/no
+  # type and reads back the probability of yes. A nil probability is a refusal.
   module Protocol
     # TypeSafe's System One: questions keyed by name, yes/no is "noul".
     module SystemOne
-      def self.payload(model, state, rules)
-        questions = {}
-        rules.each { |rule| questions[rule.question_key] = question(rule) }
-        body = { "state" => state, "questions" => questions }
+      def self.payload(model, state, questions)
+        rendered = {}
+        questions.each { |question| rendered[question.key] = render(question) }
+        body = { "state" => state, "questions" => rendered }
         body["model"] = model unless model.to_s.empty?
         body
       end
 
-      def self.question(rule)
-        question = { "type" => "noul", "instructions" => rule.question }
+      def self.render(question)
+        rendered = { "type" => "noul", "instructions" => question.instructions }
         criteria = {}
-        criteria["true"] = rule.yes_means if rule.yes_means
-        criteria["false"] = rule.no_means if rule.no_means
-        question["criteria"] = criteria unless criteria.empty?
-        question
+        criteria["true"] = question.yes_means if question.yes_means
+        criteria["false"] = question.no_means if question.no_means
+        rendered["criteria"] = criteria unless criteria.empty?
+        rendered
       end
 
-      def self.parse(data, rules)
+      def self.parse(data, questions)
         answers = data["answers"]
         raise ApiError, "Response has no answers: #{JSON.generate(data)[0, 200]}" unless answers.is_a?(Hash)
 
         probabilities = {}
-        rules.each do |rule|
-          probabilities[rule.question_key] = Protocol.probability(answers[rule.question_key], "noul", rule)
+        questions.each do |question|
+          probabilities[question.key] = Protocol.probability(answers[question.key], "noul", question)
         end
         probabilities
       end
@@ -39,22 +39,19 @@ module Judgelint
     # OpenAI's Decisions API: questions are a list with names, yes/no is
     # "predicate" with no criteria field, and answers come back as a list.
     module Decisions
-      def self.payload(model, state, rules)
-        questions = rules.map do |rule|
-          { "type" => "predicate", "name" => rule.question_key, "instructions" => instructions(rule) }
-        end
-        { "model" => model, "input" => state, "questions" => questions }
+      def self.payload(model, state, questions)
+        { "model" => model, "input" => state, "questions" => questions.map { |question| render(question) } }
       end
 
       # Criteria become lines of the instructions, as RubyLLM and LiteLLM do.
-      def self.instructions(rule)
-        lines = [rule.question]
-        lines << "Yes: #{rule.yes_means}" if rule.yes_means
-        lines << "No: #{rule.no_means}" if rule.no_means
-        lines.join("\n")
+      def self.render(question)
+        lines = [question.instructions]
+        lines << "Yes: #{question.yes_means}" if question.yes_means
+        lines << "No: #{question.no_means}" if question.no_means
+        { "type" => "predicate", "name" => question.key, "instructions" => lines.join("\n") }
       end
 
-      def self.parse(data, rules)
+      def self.parse(data, questions)
         answers = data["answers"]
         raise ApiError, "Response has no answers: #{JSON.generate(data)[0, 200]}" unless answers.is_a?(Array)
 
@@ -67,9 +64,9 @@ module Judgelint
           name.empty? ? unnamed << answer : by_name[name] = answer
         end
         probabilities = {}
-        rules.each do |rule|
-          answer = by_name.key?(rule.question_key) ? by_name[rule.question_key] : unnamed.shift
-          probabilities[rule.question_key] = Protocol.probability(answer, "probability", rule)
+        questions.each do |question|
+          answer = by_name.key?(question.key) ? by_name[question.key] : unnamed.shift
+          probabilities[question.key] = Protocol.probability(answer, "probability", question)
         end
         probabilities
       end
@@ -77,11 +74,11 @@ module Judgelint
 
     ALL = { "system_one" => SystemOne, "decisions" => Decisions }.freeze
 
-    def self.probability(answer, field, rule)
+    def self.probability(answer, field, question)
       return nil if answer.is_a?(Hash) && answer["type"] == "refusal"
 
       value = answer.is_a?(Hash) ? answer[field] : nil
-      raise ApiError, "No yes/no answer for #{rule.id}: #{answer.inspect}" unless value.is_a?(Numeric)
+      raise ApiError, "No yes/no answer for #{question.key}: #{answer.inspect}" unless value.is_a?(Numeric)
 
       value.to_f
     end

@@ -17,17 +17,22 @@ module Judgelint
   # file breaks the convention, so a rule can ask "Does this rescue and discard
   # an exception?" (fail on yes) or "Does this service validate its input
   # first?" (fail on no).
+  #
+  # +scope+ "window" asks about each range of lines, so a finding says where
+  # it is; "file" asks once about the whole file, for conventions no range can
+  # show on its own. A fail_when: no rule is about the whole file by default.
   class Rule
     FRONTMATTER = /\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\z)(.*)\z/m
-    KEYS = %w[id question yes_means no_means fail_when paths excludes severity threshold message].freeze
+    KEYS = %w[id question yes_means no_means fail_when scope paths excludes severity threshold message].freeze
 
-    attr_reader :id, :question, :yes_means, :no_means, :fail_when, :paths, :excludes, :severity,
+    attr_reader :id, :question, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes, :severity,
                 :threshold, :message, :source
 
     def self.load_dir(dir, default_threshold:)
       raise ConfigError, "No rules directory at #{dir} (run `judgelint init`)" unless File.directory?(dir)
 
-      rules = Dir.glob(File.join(dir, "*.md")).sort.map { |path| load(path, default_threshold: default_threshold) }
+      # path.dup: Spinel can't yet share these Strings into the rules it builds.
+      rules = Dir.glob(File.join(dir, "*.md")).sort.map { |path| load(path.dup, default_threshold: default_threshold) }
       rules.group_by(&:question_key).each_value do |same|
         raise ConfigError, "Rule ids collide: #{same.map(&:id).join(', ')}" if same.size > 1
       end
@@ -54,6 +59,7 @@ module Judgelint
       @yes_means = text(data["yes_means"])
       @no_means = text(data["no_means"])
       @fail_when = one_of("fail_when", yes_or_no(data.fetch("fail_when", "yes")), %w[yes no])
+      @scope = one_of("scope", data.fetch("scope", @fail_when == "yes" ? "window" : "file"), %w[window file])
       @severity = one_of("severity", data.fetch("severity", "error"), %w[error warning])
       @paths = list(data["paths"], ["**/*"])
       @excludes = list(data["excludes"], [])
@@ -69,13 +75,17 @@ module Judgelint
       id.gsub(/[^A-Za-z0-9_]/, "_")
     end
 
-    def violation_probability(yes_probability)
-      fail_when == "yes" ? yes_probability : 1.0 - yes_probability
+    def window?
+      scope == "window"
     end
 
-    # Changes whenever anything the model is shown for this rule changes.
-    def digest
-      Digest::SHA256.hexdigest(JSON.generate([question, yes_means.to_s, no_means.to_s]))
+    # The ranges to ask about: windows of +size+ lines, or the whole file.
+    def ranges(source, size)
+      window? ? source.windows(size) : [[1, source.line_count]].reject { |_first, last| last.zero? }
+    end
+
+    def violation_probability(yes_probability)
+      fail_when == "yes" ? yes_probability : 1.0 - yes_probability
     end
 
     # Example files live beside the rule: rules/<id>/pass/* and rules/<id>/fail/*.

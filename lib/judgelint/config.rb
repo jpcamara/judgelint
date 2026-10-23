@@ -6,17 +6,21 @@ module Judgelint
   class Config
     FILE = ".judgelint.yml"
     KEYS = %w[
-      provider model api_base path protocol auth api_key_env headers provider_options
-      rules threshold warn_at max_bytes batch_size timeout retries cache
+      provider model api_base path protocol auth api_key_env headers provider_options price_per_million
+      rules threshold warn_at window_lines repeat threads batch_size max_state_tokens max_request_tokens
+      max_cost_usd full_run_limit timeout retries cache
     ].freeze
     # Settings that belong to one provider. Choosing another provider on the
     # command line drops the file's, so `--provider openai` doesn't ask OpenAI
     # for the file's Jev model.
-    PROVIDER_KEYS = %w[model api_base path protocol auth api_key_env headers provider_options batch_size].freeze
+    PROVIDER_KEYS = %w[
+      model api_base path protocol auth api_key_env headers provider_options batch_size price_per_million
+    ].freeze
 
     attr_reader :provider, :model, :api_base, :path, :protocol, :auth, :api_key_env, :headers,
-                :provider_options, :rules_dir, :threshold, :warn_at, :max_bytes, :batch_size,
-                :timeout, :retries, :cache_path
+                :provider_options, :price_per_million, :rules_dir, :threshold, :warn_at, :window_lines,
+                :repeat, :threads, :batch_size, :max_state_tokens, :max_request_tokens, :max_cost_usd,
+                :full_run_limit, :timeout, :retries, :cache_path
 
     def self.load(path: nil, overrides: {})
       data = Judgelint.read_yaml(path || FILE, required: !path.nil?)
@@ -59,10 +63,19 @@ module Judgelint
       @warn_at = number("warn_at", 0.4)
       raise ConfigError, "warn_at must be below threshold" unless @warn_at < @threshold
 
-      @max_bytes = number("max_bytes", 60_000).to_i
-      @batch_size = number("batch_size", 32).to_i
+      @price_per_million = price
+      @window_lines = count("window_lines", 40)
+      @repeat = count("repeat", 1)
+      @threads = count("threads", 8)
+      @batch_size = count("batch_size", 32)
+      # A request's state plus its widest question, and a whole request: Jev's
+      # 32k and 64k token limits, with room for the estimate to be off.
+      @max_state_tokens = count("max_state_tokens", 30_000)
+      @max_request_tokens = count("max_request_tokens", 60_000)
+      @max_cost_usd = number("max_cost_usd", 1.0)
+      @full_run_limit = count("full_run_limit", 300)
       @timeout = number("timeout", 30)
-      @retries = number("retries", 2).to_i
+      @retries = number("retries", 3).to_i
       cache = data.fetch("cache", ".judgelint/cache.json")
       @cache_path = cache == false ? nil : cache.to_s
     end
@@ -90,6 +103,22 @@ module Judgelint
     def mapping(key)
       value = @data.fetch(key, {})
       raise ConfigError, "#{key} must be a mapping" unless value.is_a?(Hash)
+
+      value
+    end
+
+    # The preset's price is for its default model; another model has no price
+    # unless you set one.
+    def price
+      return number("price_per_million", 0) if @data.key?("price_per_million")
+      return nil unless @preset["price_per_million"] && @model == @preset["model"]
+
+      Judgelint.number(@preset["price_per_million"])
+    end
+
+    def count(key, default)
+      value = number(key, default).to_i
+      raise ConfigError, "#{key} must be at least 1" if value < 1
 
       value
     end
