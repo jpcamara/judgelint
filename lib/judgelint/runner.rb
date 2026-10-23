@@ -65,19 +65,26 @@ module Judgelint
       files + units
     end
 
-    # Files under rules/<id>/pass must not be judged violations, files under
-    # rules/<id>/fail must. The model sees each example's path relative to its
+    attr_reader :untested
+
+    # Files under <examples>/pass must not be judged violations, files under
+    # <examples>/fail must. The model sees each example's path relative to its
     # pass/ or fail/ directory, so the directory never gives the answer away.
-    # Every rule needs both kinds, checked before anything is sent.
+    # A rule with examples needs both kinds, checked before anything is sent;
+    # rules with none are listed in +untested+.
     def plan_examples
       jobs = []
       missing = []
+      @untested = []
       @rules.each do |rule|
-        %i[pass fail].each do |expected|
+        found = %i[pass fail].to_h { |expected| [expected, example_paths(rule, expected)] }
+        if found.values.all?(&:empty?)
+          @untested << rule
+          next
+        end
+
+        found.each do |expected, paths|
           dir = File.join(rule.examples_dir, expected.to_s)
-          # A directory rule's examples are the directories under pass/ and fail/.
-          paths = rule.directory? ? Dir.glob(File.join(dir, "*")).select { |path| File.directory?(path) }.sort
-                                  : Glob.expand([File.join(dir, "**", "*")])
           missing << "#{dir}/" if paths.empty?
           paths.each do |path|
             shown = path.delete_prefix("#{dir}/")
@@ -88,7 +95,7 @@ module Judgelint
           end
         end
       end
-      raise ConfigError, "Every rule needs pass and fail examples; add some to #{missing.join(', ')}" unless missing.empty?
+      raise ConfigError, "Examples need both kinds: add some to #{missing.join(', ')}" unless missing.empty?
 
       jobs
     end
@@ -112,6 +119,14 @@ module Judgelint
     end
 
     private
+
+    # A directory rule's examples are the directories under pass/ and fail/.
+    def example_paths(rule, expected)
+      dir = File.join(rule.examples_dir, expected.to_s)
+      return Dir.glob(File.join(dir, "*")).select { |path| File.directory?(path) }.sort if rule.directory?
+
+      Glob.expand([File.join(dir, "**", "*")])
+    end
 
     def plan_file(source, rules, lines, expected: nil)
       unknown = source.suppressed_ids - @rules.map(&:id)

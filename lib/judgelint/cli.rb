@@ -133,8 +133,8 @@ module Judgelint
 
       base = @pr ? Changes.pr_base : @base
       changes = base ? Changes.since(base) : nil
-      paths = check_paths(rules, changes)
-      directories = check_directories(rules)
+      paths = check_paths(rules, changes).reject { |path| Glob.match_any?(config.ignore, path) }
+      directories = check_directories(rules).reject { |dir| Glob.match_any?(config.ignore, dir) }
       units = paths.size + directories.size
       if @argv.empty? && changes.nil? && units > config.full_run_limit && !@yes
         what = directories.empty? ? "files" : "files and directories"
@@ -186,6 +186,10 @@ module Judgelint
 
       runner = runner(config, rules)
       jobs = runner.plan_examples
+      untested = runner.untested
+      raise ConfigError, "No rule has examples yet. Add some under #{rules.first.examples_dir}/{pass,fail}/" if jobs.empty?
+
+      @err.puts "#{untested.size} #{untested.size == 1 ? 'rule has' : 'rules have'} no examples: #{untested.map(&:id).join(', ')}" unless untested.empty?
       guard_cost(config, runner, jobs)
       examples = runner.execute(jobs).flatten
       Reporter.new(@out, format: @format).fixtures(examples, usage: @usage)
@@ -207,7 +211,7 @@ module Judgelint
       _config, rules = load_rules
       rules.each do |rule|
         count = rule.directory? ? "#{rule.directories.size} dirs" : "#{Glob.expand(rule.paths).count { |path| rule.applies_to?(path) }} files"
-        @out.puts format("%-24s %-8s %10s  %s", rule.id, rule.severity, count, rule.question)
+        @out.puts format("%-24s %-8s %10s  %s", rule.id, rule.severity, count, rule.question || rule.message)
       end
       0
     end
@@ -230,7 +234,7 @@ module Judgelint
 
     def load_rules
       config = Config.load(path: @config_path, overrides: @overrides)
-      [config, Rule.load_dir(config.rules_dir, default_threshold: config.threshold)]
+      [config, Spec.discover(rules_dir: config.rules_dir, default_threshold: config.threshold, ignore: config.ignore)]
     end
 
     def runner(config, rules)

@@ -45,17 +45,18 @@ module Judgelint
 
     def text(verdicts, file_count)
       shown = verdicts.reject { |verdict| verdict.status == :pass }
+      width = shown.map { |verdict| verdict.rule.id.size }.max
       shown.group_by(&:path).each do |path, group|
         @out.puts path
-        group.each { |verdict| @out.puts "  #{line(verdict)}" }
+        group.each { |verdict| @out.puts "  #{line(verdict, width)}" }
       end
       @out.puts "" unless shown.empty?
       @out.puts summary(verdicts, file_count)
     end
 
-    def line(verdict)
+    def line(verdict, width)
       label = verdict.status == :violation ? verdict.rule.severity : verdict.status.to_s
-      format("%s %-10s %-24s %-9s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
+      format("%s %-10s %-#{width}s  %-7s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
              range(verdict), probability(verdict), verdict.rule.message)
     end
 

@@ -3,69 +3,85 @@
   "violations": [
     {
       "path": "src/services/apply-refund.ts",
-      "rule": "failures-are-values",
+      "rule": "src/services/domain-failures-are-values-never-exceptions",
       "praxis": "Domain failures are raised via throw instead of returning { ok: false, error }."
     },
     {
       "path": "src/services/apply-refund.ts",
-      "rule": "failure-docs",
+      "rule": "src/services/every-service-has-a-doc-comment",
       "praxis": "Missing doc comment stating the service purpose and enumerating domain failure modes."
     },
     {
       "path": "src/services/apply-refund.ts",
-      "rule": "consumer-errors",
+      "rule": "src/services/error-messages-are-written-for-the",
       "praxis": "Error messages do not name what was wrong and what would be accepted instead."
     },
     {
       "path": "src/services/notify-parlor.ts",
-      "rule": "no-direct-io",
+      "rule": "src/services/no-i-o-except-through-the",
       "praxis": "Uses console.log and fetch."
     },
     {
       "path": "src/services/parlor.ts",
-      "rule": "verb-first-name",
+      "rule": "src/services/the-module-name-is-verb-first",
       "praxis": "parlor.ts is a noun, not verb-first kebab-case."
     },
     {
       "path": "src/services/parlor.ts",
-      "rule": "one-entry-point",
+      "rule": "src/services/a-service-module-exports-exactly-one",
       "praxis": "Exports run, formatParlor, and isEligible."
     },
     {
       "path": "src/services/rank-parlors.ts",
-      "rule": "consumer-errors",
+      "rule": "src/services/error-messages-are-written-for-the",
       "praxis": "Returns error 'invalid input'."
     },
     {
       "path": "src/services/update-parlor-hours.ts",
-      "rule": "consumer-errors",
+      "rule": "src/services/error-messages-are-written-for-the",
       "praxis": "'opensAt failed the regex' and 'no' omit what would be accepted."
     },
     {
       "path": "src/services/update-parlor-hours.ts",
-      "rule": "failure-docs",
+      "rule": "src/services/every-service-has-a-doc-comment",
       "praxis": "No doc comment."
     },
     {
       "path": "src/services/update-parlor-hours.ts",
-      "rule": "validate-first",
-      "praxis": null,
+      "rule": "src/services/input-is-validated-before-any-work",
       "note": "Builds summary and label (lines 11-13) before validating; praxis's reviewer didn't flag it."
     },
     {
       "path": "src/features/flavor-of-day",
-      "rule": "feature-entry-point",
+      "rule": "src/features/exactly-one-entry-point-index-ts",
       "praxis": "index.ts is missing."
     },
     {
       "path": "src/features/flavor-of-day",
-      "rule": "no-orphaned-files",
+      "rule": "src/features/logic-files-are-verb-first-kebab",
+      "praxis": "Logic files export multiple verbs and return raw strings instead of a single run and Results."
+    },
+    {
+      "path": "src/features/flavor-of-day",
+      "rule": "src/features/no-orphaned-files",
       "praxis": "old-rotation.ts is unreachable."
     },
     {
       "path": "src/features/flavor-of-day",
-      "rule": "one-capability",
+      "rule": "src/features/one-capability-per-feature",
       "praxis": "old-rotation.ts serves a distinct legacy purpose."
+    }
+  ],
+  "missed": [
+    {
+      "path": "src/features/flavor-of-day",
+      "rule": "src/features/no-orphaned-files",
+      "note": "Scores about 0.6 (uncertain). The bullet defines orphans as files unreachable from index.ts, and this feature has no index.ts; that takes more reasoning than a decision model does."
+    },
+    {
+      "path": "src/features/flavor-of-day",
+      "rule": "src/features/one-capability-per-feature",
+      "note": "Scores about 0.2. old-rotation.ts is the feature's earlier rotation, so whether it's a second capability is arguable."
     }
   ]
 }

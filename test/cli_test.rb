@@ -266,7 +266,7 @@ class CLITest < Minitest::Test
       runners.each do |name, run|
         status, _out, err = run.call(["test"])
         assert_equal 2, status, name
-        assert_match(%r{needs pass and fail examples; add some to \.judgelint/rules/smell/pass/}, err, name)
+        assert_match(%r{Examples need both kinds: add some to \.judgelint/rules/smell/pass/}, err, name)
       end
       assert_empty @server.requests
     end
@@ -319,10 +319,11 @@ class CLITest < Minitest::Test
       runners.each do |name, run|
         status, out, = run.call(["init"])
         assert_equal 0, status, name
-        assert_match(/no-silent-rescue\.md/, out, name)
+        assert_match(%r{\.judgelint/rules/ruby\.md}, out, name)
       end
       rules = Judgelint::Rule.load_dir(".judgelint/rules", default_threshold: 0.7)
-      assert_equal ["no-silent-rescue"], rules.map(&:id)
+      assert_equal %w[ruby/no-silent-rescues ruby/error-messages-say-what-to-do], rules.map(&:id)
+      assert File.file?(".judgelint/examples/ruby/no-silent-rescues/fail/returns_nil.rb")
     end
   end
 

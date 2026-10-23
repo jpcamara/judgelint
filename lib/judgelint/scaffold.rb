@@ -8,22 +8,23 @@ module Judgelint
       provider: typesafe      # `judgelint providers` lists the others
       model: jev-latest
       # threshold: 0.7        # violation probability that counts as a violation
-      # warn_at: 0.4          # below threshold but at least this is reported as uncertain
-      rules: .judgelint/rules
+      # ignore: ["vendor/**"] # files no rule judges
     YAML
 
-    RULE = <<~MARKDOWN
+    # A spec: each bullet is a convention judgelint checks. A README with
+    # paths: frontmatter works the same way, next to the code it governs.
+    SPEC = <<~MARKDOWN
       ---
-      question: Does this code rescue an exception and then carry on as if nothing happened?
-      yes_means: A rescue neither logs the error, re-raises it, nor returns an explicit failure to the caller.
-      no_means: Every rescue logs, re-raises, or turns the error into a result the caller sees. Code with no rescue counts as no.
       paths: ["**/*.rb"]
       excludes: ["test/**", "spec/**"]
       ---
-      Swallowed exceptions hide bugs until they cost us data.
+      # Ruby conventions
 
-      RuboCop's Lint/SuppressedException only catches an empty rescue. This rule
-      also catches a rescue that returns nil, or assigns a default, and moves on.
+      - **No silent rescues.** A rescue logs the error, re-raises it, or turns it
+        into a result the caller sees. Swallowed exceptions hide bugs until they
+        cost us data.
+      - **Error messages say what to do next.** A raised or returned error names
+        what was wrong and what would work instead.
     MARKDOWN
 
     PASS_EXAMPLE = <<~RUBY
@@ -44,12 +45,12 @@ module Judgelint
     RUBY
 
     def self.write(root, out)
-      rule = ".judgelint/rules/no-silent-rescue"
+      examples = ".judgelint/examples/ruby/no-silent-rescues"
       files = {
         Config::FILE => CONFIG,
-        "#{rule}.md" => RULE,
-        File.join(rule, "pass", "logs_and_reraises.rb") => PASS_EXAMPLE,
-        File.join(rule, "fail", "returns_nil.rb") => FAIL_EXAMPLE
+        ".judgelint/rules/ruby.md" => SPEC,
+        File.join(examples, "pass", "logs_and_reraises.rb") => PASS_EXAMPLE,
+        File.join(examples, "fail", "returns_nil.rb") => FAIL_EXAMPLE
       }
       files.each do |name, content|
         path = root == "." ? name : File.join(root, name)

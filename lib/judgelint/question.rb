@@ -19,6 +19,8 @@ module Judgelint
     # "Answer yes only when..." keeps the model from flagging code the rule
     # doesn't cover.
     def instructions
+      return convention_instructions if rule.convention
+
       text = rule.window? ? "Look at lines #{first}-#{last} of the file; the rest is context. #{rule.question}" : rule.question
       return text unless rule.fail_when == "yes"
 
@@ -27,12 +29,30 @@ module Judgelint
       "#{text} Answer yes only when #{scope}, not when the question doesn't apply."
     end
 
+    # A spec's bullet, asked as written.
+    def convention_instructions
+      ask =
+        case rule.scope
+        when "window"
+          "Do lines #{first}-#{last} of the file (the rest is context) break this convention? Answer yes only " \
+            "when those lines clearly break it, not when it doesn't apply to them."
+        when "file"
+          "Does this file break this convention? Answer yes only when the file clearly breaks it, not when it " \
+            "doesn't apply to the file."
+        else
+          "Do the files in this directory break this convention? Answer yes only when they clearly break it, " \
+            "not when it doesn't apply to them."
+        end
+      "#{ask} Convention: #{rule.convention}"
+    end
+
+    # A convention gets the criteria a question would spell out by hand.
     def yes_means
-      rule.yes_means
+      rule.yes_means || (rule.convention && "The code clearly breaks the convention.")
     end
 
     def no_means
-      rule.no_means
+      rule.no_means || (rule.convention && "The code follows the convention, or the convention doesn't apply to it.")
     end
 
     def digest

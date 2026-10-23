@@ -12,7 +12,7 @@ module Judgelint
   # In a directory, either one covers the directory.
   class Source
     SUPPRESSION = %r{(?:#|//|--|/\*|<!--|;)\s*judgelint:(disable-file|disable)\b(.*)\z}
-    REASONED = /\A\s+([A-Za-z0-9_, -]+?)\s+--\s+\S/
+    REASONED = %r{\A\s+([A-Za-z0-9_./, -]+?)\s+--\s+\S}
 
     attr_reader :path, :shown_as, :line_count
 

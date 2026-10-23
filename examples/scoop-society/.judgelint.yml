@@ -1,3 +1,6 @@
-# judgelint on praxis's demo app. See README.md.
+# judgelint on praxis's demo app, reading praxis's own README specs. See README.md.
 provider: typesafe
 model: jev-latest
+# As in praxis: underscore files are scratch, and generated files aren't reviewed.
+ignore: ["src/services/_*", "src/generated/**"]
+repeat: 3

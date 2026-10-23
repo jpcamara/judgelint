@@ -34,7 +34,7 @@ Windows included, you get the same tool in plain Ruby.
 ## Quick start
 
 ```sh
-judgelint init                  # writes .judgelint.yml and an example rule
+judgelint init                  # writes .judgelint.yml and an example spec
 export TYPESAFE_API_KEY=...
 judgelint test                  # judge the example rule's examples
 judgelint --base main           # check what changed since main
@@ -43,16 +43,29 @@ judgelint                       # or every file the rules govern
 ```
 
 ```text
-judgelint: 16 requests, 31,518 input tokens, $0.0013
-lib/judgelint/client.rb
-  ? uncertain  no-silent-rescue         41-80     0.44  Swallowed exceptions hide bugs until they cost us data.
-lib/judgelint/pool.rb
-  ? uncertain  no-silent-rescue         1-40      0.56  Swallowed exceptions hide bugs until they cost us data.
+$ judgelint src/services/apply-refund.ts src/services/parlor.ts src/features/flavor-of-day
+src/services/apply-refund.ts
+  x error      src/services/domain-failures-are-values-never-exceptions  1-21    0.95  Domain failures are values, never exceptions.
+  x error      src/services/error-messages-are-written-for-the           1-21    0.93  Error messages are written for the API consumer.
+  x error      src/services/every-service-has-a-doc-comment              1-21    0.97  Every service has a doc comment stating its purpose in one sentence and enumerating its domain failure modes, so a caller can handle every `error` without reading the body.
+src/services/parlor.ts
+  x error      src/services/a-service-module-exports-exactly-one         1-40    0.89  A service module exports exactly one entry point.
+  x error      src/services/the-module-name-is-verb-first                1-40    0.85  The module name is verb-first kebab-case and says what the service does.
+  ? uncertain  src/services/input-is-validated-before-any-work           1-40    0.54  Input is validated before any work happens.
+  ? uncertain  src/services/services-do-one-thing                        41-47   0.46  Services do one thing.
+  ? uncertain  src/services/every-service-has-a-doc-comment              41-47   0.46  Every service has a doc comment stating its purpose in one sentence and enumerating its domain failure modes, so a caller can handle every `error` without reading the body.
+src/features/flavor-of-day
+  x error      src/features/exactly-one-entry-point-index-ts                     0.79  Exactly one entry point, `index.ts`, which re-exports the feature's entire public API.
+  x error      src/features/logic-files-are-verb-first-kebab                     0.87  Logic files are verb-first kebab-case (`build-menu.ts`, `pick-winners.ts`) and follow the service conventions (`src/services/README.md`).
+  ? uncertain  src/features/no-orphaned-files                                    0.57  No orphaned files.
+  ? uncertain  src/features/the-feature-s-name-describes-the                     0.45  The feature's name describes the capability (`tasting-menu`), not its implementation.
 
-16 files, 0 violations, 2 uncertain
+3 files, 7 violations, 5 uncertain
+judgelint: 0 requests, 0 input tokens, $0.0000
 ```
 
-Each finding names the lines it came from. Exit status is 0 when clean, 1 when
+That's [praxis's demo](examples/scoop-society), checked against its own README
+specs from the answer cache. Each finding names the lines it came from. Exit status is 0 when clean, 1 when
 an `error` rule is violated (or, for `judgelint test`, when an example is
 misjudged), and 2 for usage, configuration, or model errors. Everything that
 can be checked (rules, examples, budgets, keys, git refs) is checked before
@@ -60,62 +73,67 @@ the first paid request.
 
 ## Rules
 
-A rule is a markdown file in `.judgelint/rules/`. The frontmatter is the
-question; the body is the rationale people read.
+Write conventions the way you already do: as bullets in a README next to the
+code they govern. A README (or any `*.judgelint.md`) whose frontmatter has
+`paths:` is a spec, and each top-level bullet is a rule.
 
 ```markdown
 ---
-question: Does this code rescue an exception and then carry on as if nothing happened?
-yes_means: A rescue neither logs the error, re-raises it, nor returns an explicit failure to the caller.
-no_means: Every rescue logs, re-raises, or turns the error into a result the caller sees. Code with no rescue counts as no.
-paths: ["app/**/*.rb", "lib/**/*.rb"]
-excludes: ["lib/tasks/**"]
+paths: ["src/services/*.ts"]
+excludes: ["src/services/legacy-import.ts"]
 ---
-Swallowed exceptions hide bugs until they cost us data.
+# Service conventions
+
+- **Domain failures are values, never exceptions.** A service returns
+  `{ ok: false, error }` for anything a caller could plausibly cause.
+- **No I/O except through the injected Store.** No timers, no fetch, no console.
 ```
 
-| Key | Default | Meaning |
+That's two rules, `src/services/domain-failures-are-values-never-exceptions`
+and `src/services/no-i-o-except-through-the`, named from their lead words. The
+model is asked each bullet as written: "Do lines 1-40 of the file (the rest is
+context) break this convention? Answer yes only when those lines clearly break
+it, not when it doesn't apply to them." A bullet that says "should" or
+"prefer" is a warning; anything else is an error. judgelint reads praxis specs
+as they are, `cohort` included (see [examples/scoop-society](examples/scoop-society)).
+
+| Frontmatter | Default | Meaning |
 |---|---|---|
-| `question` | required | The yes/no question. Keep it narrow: one convention, answerable from the file alone. |
-| `yes_means`, `no_means` | none | What each answer means. Sent to the model as criteria. |
-| `fail_when` | `yes` | Which answer is a violation. Use `no` for questions like "Does this service validate its input first?" |
-| `scope` | `window` (`file` when `fail_when: no`) | `window` asks about each range of lines; `file` asks once about the whole file; `directory` asks once about each directory `paths` matches, with all its files. |
-| `context` | none | Globs for files the model reads alongside, such as shared types. They're never judged. |
-| `paths`, `excludes` | `**/*`, none | Globs for the files the rule governs. `**/` matches zero or more directories. |
-| `severity` | `error` | `error` fails the run; `warning` is reported only. |
-| `threshold` | config's | Violation probability at or above which the file is a violation. |
-| `message` | body's first paragraph | What judgelint prints for a violation. |
-| `id` | file name | Rule id. |
+| `paths`, `excludes` | required, none | Globs for the files the spec governs, from the project root. `**/` matches zero or more directories. |
+| `context` | none | Files the model reads alongside, such as shared types. They're never judged. |
+| `scope` (or praxis's `cohort`) | `window` | `window` asks about each range of lines, so findings name lines; `file` (`by_file`) asks once about each file; `directory` (`by_directory`) asks once about each directory `paths` matches, with every file in it. |
+| `severity` | from the wording | `error` fails the run; `warning` is reported only. |
+| `threshold` | config's | Violation probability at or above which the code is a violation. |
 
-The model sees the whole file, with numbered lines, and one question per rule
-and window: "Look at lines 41-80 of the file; the rest is context. Does this
-code ...? Answer yes only when those lines do it, not when the question doesn't
-apply." That last sentence keeps the model from flagging code a rule doesn't
-cover. All of a file's questions share one request (or a few, packed to the
-provider's limits), so a file's verdicts never depend on which files ran
-beside it, and a rule's verdict is its worst window.
+The model sees the whole file with numbered lines, and every rule that governs
+it shares one request (or a few, packed to the provider's limits), so a file's
+verdicts never depend on which files ran beside it. A rule's verdict is its
+worst window. The answer is the probability the code breaks the convention: at
+or above `threshold` it's a violation, at or above `warn_at` it's uncertain
+(reported, never fails), and below that it passes.
 
-Some conventions are about how files relate: one entry point per feature, no
-orphaned files. A `scope: directory` rule judges each directory its `paths`
-match as one unit, with every file in it (and its `context`):
+### Precise rules
+
+A bullet is usually enough. When one isn't (the [example](examples/scoop-society)
+shows a bullet that needs more reasoning than a decision model does), write
+that rule as a question in `.judgelint/rules/<id>.md`, with criteria the model
+weighs its answer against:
 
 ```markdown
 ---
 question: Is any file in this directory unreachable from index.ts through its imports?
+yes_means: A file nothing in the feature imports, or a directory with no index.ts at all.
+no_means: Every file is imported, directly or indirectly, by index.ts.
 scope: directory
 paths: ["src/features/*"]
-context: ["src/domain/types.ts"]
 ---
 Every file in a feature is reachable from index.ts.
 ```
 
-A directory rule's examples are directories: `rules/<id>/pass/<name>/` and
-`rules/<id>/fail/<name>/`. With `--base`, a directory is checked when a change
-touched any file in it.
-
-The answer is the probability of yes, turned into a violation probability by
-`fail_when`: at or above `threshold` it's a violation, at or above `warn_at`
-it's uncertain (reported, never fails), and below that it passes.
+`question`, `yes_means`, and `no_means` are what the model sees. `fail_when:
+no` inverts a question like "Does this service validate its input first?", and
+`message` and `id` default to the body's first paragraph and the file name. A
+file in `.judgelint/rules/` without a `question` is a spec like any README.
 
 ### Writing rules the model can apply
 
@@ -140,8 +158,8 @@ When a person has decided flagged code is fine, say so where it is, with a
 reason:
 
 ```ruby
-# judgelint:disable no-silent-rescue -- the caller retries and re-raises
-# judgelint:disable-file no-silent-rescue, other-rule -- generated code
+# judgelint:disable lib/no-silent-rescues -- the caller retries and re-raises
+# judgelint:disable-file lib/no-silent-rescues, ruby/error-messages-say-what-to-do -- generated code
 ```
 
 A `disable` comment covers the window it falls in; `disable-file` covers the
@@ -159,27 +177,31 @@ the only way to know whether a rule works is to try it. So rules carry
 examples:
 
 ```text
-.judgelint/rules/no-silent-rescue.md
-.judgelint/rules/no-silent-rescue/pass/logs_and_reraises.rb
-.judgelint/rules/no-silent-rescue/fail/returns_nil.rb
+.judgelint/examples/<rule id>/pass/...   # must not be judged violations
+.judgelint/examples/<rule id>/fail/...   # must be
 ```
 
+For a precise rule they sit beside it, in `.judgelint/rules/<id>/pass/` and
+`fail/`; for a directory rule, each example is a directory under `pass/` or
+`fail/`.
+
 `judgelint test` judges every example and reports which ones the model gets
-wrong, with the probability it gave. Every rule needs at least one `pass/`
-and one `fail/` example, or `test` stops before sending anything:
+wrong, with the probability it gave. A rule with examples needs at least one
+of each kind, or `test` stops before sending anything; rules with none are
+listed, so you can see what's untested:
 
 ```text
-no-silent-rescue  9/10
-  ok   pass 0.15  .judgelint/rules/no-silent-rescue/pass/logs_and_defaults.rb
-  ok   pass 0.03  .judgelint/rules/no-silent-rescue/pass/logs_and_reraises.rb
-  MISS pass 0.79  .judgelint/rules/no-silent-rescue/pass/retries_then_raises.rb
-  ok   fail 0.94  .judgelint/rules/no-silent-rescue/fail/assigns_default.rb
+lib/no-silent-rescues  9/10
+  ok   pass 0.15  .judgelint/examples/lib/no-silent-rescues/pass/logs_and_defaults.rb
+  ok   pass 0.03  .judgelint/examples/lib/no-silent-rescues/pass/logs_and_reraises.rb
+  MISS pass 0.79  .judgelint/examples/lib/no-silent-rescues/pass/retries_then_raises.rb
+  ok   fail 0.94  .judgelint/examples/lib/no-silent-rescues/fail/assigns_default.rb
   ...
 ```
 
 A miss means the question needs rewording, the threshold needs moving, or the
 convention is too broad for one question. (Adding "retries before eventually
-raising" to `no_means` took this repo's own rule to 10/10.) The model sees
+raising" to the rule took this repo's own rule, in [lib/README.md](lib/README.md), to 10/10.) The model sees
 each example's path relative to `pass/` or `fail/`, so the directory never
 leaks the answer.
 
@@ -245,7 +267,8 @@ provider: typesafe        # see `judgelint providers`
 model: jev-latest         # defaults to the provider's
 threshold: 0.7            # violation probability that counts as a violation
 warn_at: 0.4              # at least this, but below threshold, is reported as uncertain
-rules: .judgelint/rules
+rules: .judgelint/rules   # precise rules and specs, besides READMEs
+ignore: ["vendor/**"]     # files no rule judges, and READMEs that are never specs
 window_lines: 40          # lines per window
 repeat: 1                 # send each request this many times and average (Jev varies run to run)
 threads: 8                # files judged at once

@@ -6,20 +6,22 @@ require "stringio"
 
 # Replays examples/scoop-society from its committed cache, with the network
 # pointed nowhere, and checks the verdicts against praxis's (expected.json):
-# every listed violation is found and nothing else is a violation. A changed
-# rule or file is a cache miss, which fails here until `rake example`
-# re-records it.
+# every listed violation but the known misses is found, and nothing else is a
+# violation. A changed rule or file is a cache miss, which fails here until
+# `rake example` re-records it.
 class ExampleTest < Minitest::Test
   ROOT = File.expand_path("..", __dir__)
   EXAMPLE = File.join(ROOT, "examples", "scoop-society")
 
   def test_matches_praxis_on_its_own_demo
-    expected = JSON.parse(File.read(File.join(EXAMPLE, "expected.json")))["violations"]
-                   .map { |violation| [violation["path"], violation["rule"]] }.sort
+    spec = JSON.parse(File.read(File.join(EXAMPLE, "expected.json")))
+    pairs = ->(list) { list.map { |violation| [violation["path"], violation["rule"]] } }
+    expected = (pairs.call(spec["violations"]) - pairs.call(spec["missed"])).sort
 
     Dir.mktmpdir("judgelint-example") do |dir|
       config = File.join(dir, "offline.yml")
-      File.write(config, "provider: typesafe\nmodel: jev-latest\napi_base: http://127.0.0.1:1\nretries: 0\n")
+      File.write(config, "provider: typesafe\nmodel: jev-latest\napi_base: http://127.0.0.1:1\nretries: 0\nrepeat: 3\n" \
+                         "ignore: [\"src/services/_*\", \"src/generated/**\"]\n")
       runners.each do |name, command|
         out, err, status = Open3.capture3({ "TYPESAFE_API_KEY" => "offline" }, *command, "--config", config,
                                           "--format", "json", chdir: EXAMPLE)

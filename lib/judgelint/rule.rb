@@ -28,39 +28,29 @@ module Judgelint
   # types, which are never judged themselves.
   class Rule
     FRONTMATTER = /\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\z)(.*)\z/m
-    KEYS = %w[id question yes_means no_means fail_when scope paths excludes context severity threshold message].freeze
+    KEYS = %w[id question convention yes_means no_means fail_when scope paths excludes context severity threshold message].freeze
 
-    attr_reader :id, :question, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes, :context,
-                :severity, :threshold, :message, :source
+    attr_reader :id, :question, :convention, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes,
+                :context, :severity, :threshold, :message, :source, :examples_dir
 
+    # The rules in +dir+ alone (Spec.discover also finds READMEs).
     def self.load_dir(dir, default_threshold:)
-      raise ConfigError, "No rules directory at #{dir} (run `judgelint init`)" unless File.directory?(dir)
-
-      # path.dup: Spinel can't yet share these Strings into the rules it builds.
-      rules = Dir.glob(File.join(dir, "*.md")).sort.map { |path| load(path.dup, default_threshold: default_threshold) }
-      rules.group_by(&:question_key).each_value do |same|
-        raise ConfigError, "Rule ids collide: #{same.map(&:id).join(', ')}" if same.size > 1
-      end
-      rules
+      Spec.discover(rules_dir: dir, default_threshold: default_threshold, readmes: false)
     end
 
-    def self.load(path, default_threshold:)
-      match = FRONTMATTER.match(File.read(path))
-      raise ConfigError, "#{path}: rules start with a --- frontmatter block" unless match
-
-      data = Judgelint.parse_yaml(match[1], path)
-      new(data, source: path, body: match[2].strip, default_threshold: default_threshold)
-    end
-
-    def initialize(data, source:, body: "", default_threshold: 0.7)
+    # A rule is a question asked exactly as written, or a convention (a
+    # spec's bullet) asked whether the code breaks it.
+    def initialize(data, source:, body: "", default_threshold: 0.7, examples_dir: nil)
       unknown = data.keys - KEYS
       raise ConfigError, "#{source}: unknown keys #{unknown.join(', ')}" unless unknown.empty?
 
       @source = source
       @id = (data["id"] || File.basename(source, ".md")).to_s
-      @question = data["question"].to_s.strip
-      raise ConfigError, "#{source}: a rule needs a question" if @question.empty?
+      @question = text(data["question"])
+      @convention = text(data["convention"])
+      raise ConfigError, "#{source}: a rule needs a question" if @question.nil? && @convention.nil?
 
+      @examples_dir = examples_dir || source.delete_suffix(".md")
       @yes_means = text(data["yes_means"])
       @no_means = text(data["no_means"])
       @fail_when = one_of("fail_when", yes_or_no(data.fetch("fail_when", "yes")), %w[yes no])
@@ -70,7 +60,7 @@ module Judgelint
       @excludes = list(data["excludes"], [])
       @context = list(data["context"], [])
       @threshold = parse_threshold(data.key?("threshold") ? data["threshold"] : default_threshold)
-      @message = (data["message"] || first_paragraph(body) || @question).to_s.strip
+      @message = (data["message"] || first_paragraph(body) || @question || @convention).to_s.strip
     end
 
     def applies_to?(path)
@@ -105,11 +95,6 @@ module Judgelint
 
     def violation_probability(yes_probability)
       fail_when == "yes" ? yes_probability : 1.0 - yes_probability
-    end
-
-    # Example files live beside the rule: rules/<id>/pass/* and rules/<id>/fail/*.
-    def examples_dir
-      source.delete_suffix(".md")
     end
 
     def error?

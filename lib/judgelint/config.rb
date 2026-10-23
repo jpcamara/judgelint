@@ -7,7 +7,7 @@ module Judgelint
     FILE = ".judgelint.yml"
     KEYS = %w[
       provider model api_base path protocol auth api_key_env headers provider_options price_per_million
-      rules threshold warn_at window_lines repeat threads batch_size max_state_tokens max_request_tokens
+      rules ignore threshold warn_at window_lines repeat threads batch_size max_state_tokens max_request_tokens
       max_cost_usd full_run_limit timeout retries cache
     ].freeze
     # Settings that belong to one provider. Choosing another provider on the
@@ -18,7 +18,7 @@ module Judgelint
     ].freeze
 
     attr_reader :provider, :model, :api_base, :path, :protocol, :auth, :api_key_env, :headers,
-                :provider_options, :price_per_million, :rules_dir, :threshold, :warn_at, :window_lines,
+                :provider_options, :price_per_million, :rules_dir, :ignore, :threshold, :warn_at, :window_lines,
                 :repeat, :threads, :batch_size, :max_state_tokens, :max_request_tokens, :max_cost_usd,
                 :full_run_limit, :timeout, :retries, :cache_path
 
@@ -59,6 +59,8 @@ module Judgelint
       @headers = mapping("headers")
       @provider_options = mapping("provider_options")
       @rules_dir = data.fetch("rules", ".judgelint/rules").to_s
+      # Files no rule ever judges, and READMEs that are never specs.
+      @ignore = list("ignore")
       @threshold = number("threshold", 0.7)
       @warn_at = number("warn_at", 0.4)
       raise ConfigError, "warn_at must be below threshold" unless @warn_at < @threshold
@@ -98,6 +100,11 @@ module Judgelint
     def setting(key)
       value = @data.key?(key) ? @data[key] : @preset[key]
       value.nil? ? nil : value.to_s
+    end
+
+    def list(key)
+      value = @data.fetch(key, [])
+      value.is_a?(Array) ? value.map(&:to_s) : [value.to_s]
     end
 
     def mapping(key)

@@ -2,12 +2,15 @@
 
 module Judgelint
   # Path matching shared by rule targeting and file discovery. `**/` matches
-  # zero or more directories and `{a,b}` alternates, as in Dir.glob.
+  # zero or more directories and `{a,b}` alternates, as in Dir.glob, and a
+  # trailing `/**` matches everything under a directory.
   module Glob
     FLAGS = File::FNM_PATHNAME | File::FNM_EXTGLOB
 
     def self.match_any?(patterns, path)
-      patterns.any? { |pattern| File.fnmatch?(pattern, path, FLAGS) }
+      patterns.any? do |pattern|
+        File.fnmatch?(pattern, path, FLAGS) || (pattern.end_with?("/**") && File.fnmatch?("#{pattern}/*", path, FLAGS))
+      end
     end
 
     def self.expand(patterns)
