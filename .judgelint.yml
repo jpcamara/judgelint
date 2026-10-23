@@ -1,0 +1,3 @@
+# judgelint checks itself: `bundle exec exe/judgelint` and `bundle exec exe/judgelint test`.
+provider: typesafe
+model: jev-latest

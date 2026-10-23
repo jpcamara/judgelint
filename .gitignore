@@ -1,0 +1,6 @@
+/build/
+/pkg/
+/Gemfile.lock
+/.bundle/
+/.judgelint/cache.json
+/vendor/
