@@ -16,8 +16,7 @@ judgelint reads those READMEs unchanged. Every top-level bullet becomes a rule,
 | [tests/README.md](tests/README.md) | each test file | 8 |
 
 The only judgelint-specific file is [.judgelint.yml](.judgelint.yml), which
-ignores underscore files and generated files as praxis does, and asks each
-question three times (`repeat: 3`) to steady the borderline answers.
+ignores underscore files and generated files, as praxis does.
 
 ## Against praxis's verdicts
 
@@ -29,7 +28,8 @@ question three times (`repeat: 3`) to steady the borderline answers.
 | Violations praxis recorded, plus one it missed | 14 |
 | Found by judgelint | 12 |
 | Found by judgelint and not expected | 0 |
-| Cost of a run | 60 requests, about 114,000 input tokens, $0.0048 |
+| Uncertain findings (reported, never failing) | 17 or 18 |
+| Cost of a run | 20 requests, about 38,000 input tokens, $0.0016 |
 
 The one praxis missed: `update-parlor-hours.ts` builds `summary` and `label`
 (lines 11-13) before it validates anything, which breaks "input is validated
@@ -51,9 +51,11 @@ earlier version of this example wrote 13 of praxis's conventions that way, by
 hand, and found all 13 violations it was checked against, the orphaned file
 included. Asking the bullets as written gets 12 of 14 with nothing to write.
 
-Uncertain findings (15 in the cached run) are reported but never fail a run.
-Most come from bullets that bundle several requirements, like the service
-entry-point bullet, where the model is less sure.
+Most uncertain findings come from bullets that bundle several requirements,
+like the service entry-point bullet, where the model is less sure. Asking a
+second model and averaging helps: with `models: [typesafe, cloudflare]`, the
+same 12 violations are found, none false, and 5 findings are uncertain, for
+$0.0115 a run.
 
 ## Running it
 

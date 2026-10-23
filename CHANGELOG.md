@@ -2,33 +2,20 @@
 
 ## 0.1.0 (unreleased)
 
-- First version: `check`, `test`, `rules`, and `init` commands; markdown rules
-  with yes/no questions; a System One client with no runtime dependencies; answer cache;
-  text and JSON output; native binary through Spinel.
-- Presets for 16 decision-model providers, both the System One and OpenAI
-  Decisions protocols, configurable path, auth, headers, and `${VAR}` in URLs,
-  Cloudflare's response envelope, refusals, retries, and `judgelint providers`.
-- Platform gems for macOS and Linux carry a statically linked native binary,
-  which `judgelint` runs when it's there.
-- Line ranges: the model sees the whole numbered file and a question per rule
-  and window, and each finding names its lines. `scope: file` for rules about
-  the whole file.
-- `--base REF` and `--pr` check only the windows a change touched.
-- Every request is planned first: files over the token budget are skipped,
-  questions are packed into requests, and runs over `max_cost_usd` or
-  `full_run_limit` need `--yes`. Each run prints its requests, tokens, and cost.
-- `judgelint test` requires pass and fail examples for every rule.
-- Specs the way praxis reads them: a README (or `*.judgelint.md`) with
-  `paths:` frontmatter, where each top-level bullet is a rule asked as
-  written, named from its lead words, with severity from its wording and
-  praxis's `cohort` honored. A `question:` rule is still there for a
-  convention a bullet can't carry, and config `ignore:` keeps files and
-  READMEs out. Examples are optional; `judgelint test` lists rules without.
-- `scope: directory` judges each directory a rule's paths match as one unit,
-  for conventions about how files relate, and `context:` sends files the
-  model reads but never judges.
-- examples/scoop-society: praxis's TypeScript demo and its README specs,
-  unchanged, checked against praxis's verdicts from a committed cache.
-- `repeat`, `threads`, retries on connection errors, inline
-  `judgelint:disable` comments with a required reason, and `--format github`
-  and `--format sarif`.
+- Specs as praxis reads them: a README (or `*.judgelint.md`) with `paths:`
+  frontmatter, each top-level bullet a rule asked as written. Question rules
+  in `.judgelint/rules/` for conventions a bullet can't carry.
+- Window, file, and directory scopes; `context:` files the model reads but
+  never judges; line ranges on findings.
+- `check`, `test` (examples under `.judgelint/examples/`), `rules`,
+  `providers`, and `init`; `--base` and `--pr` for changes; text, JSON,
+  GitHub annotations, and SARIF.
+- Every request planned and priced before it's sent, with `max_cost_usd`; a
+  cost line on every run; answers cached per model.
+- 16 provider presets over the System One and OpenAI Decisions protocols, and
+  `models:` to average several.
+- Inline `judgelint:disable` comments, with a required reason.
+- No runtime dependencies; platform gems for macOS and Linux carry a native
+  binary built with Spinel.
+- examples/scoop-society: praxis's TypeScript demo, checked against praxis's
+  verdicts.

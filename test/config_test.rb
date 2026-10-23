@@ -8,72 +8,70 @@ class ConfigTest < Minitest::Test
   def test_defaults_to_jev_on_typesafe
     in_project do
       config = Judgelint::Config.load
+      jev = config.models.first
 
-      assert_equal "typesafe", config.provider
-      assert_equal "jev-latest", config.model
-      assert_equal "https://api.typesafe.ai", config.api_base
-      assert_equal "TYPESAFE_API_KEY", config.api_key_env
+      assert_equal ["typesafe:jev-latest"], config.models.map(&:label)
+      assert_equal "https://api.typesafe.ai", jev.api_base
+      assert_equal "TYPESAFE_API_KEY", jev.api_key_env
+      assert_in_delta 0.042, jev.price_per_million
       assert_in_delta 0.7, config.threshold
-      assert_equal ".judgelint/cache.json", config.cache_path
+      assert_in_delta 0.4, config.warn_at
+      assert_in_delta 1.0, config.max_cost_usd
     end
   end
 
-  def test_provider_presets_and_overrides
+  def test_models_as_provider_and_model
     in_project do
-      write(".judgelint.yml", "provider: celeris\nthreshold: 0.6\ncache: false\n")
-      config = Judgelint::Config.load(overrides: { "model" => "other" })
+      write(".judgelint.yml", "models: [typesafe, \"cloudflare:clef\", \"openrouter:jaredpalmer/kev-4b\"]\nthreshold: 0.6\n")
+      config = Judgelint::Config.load
 
-      assert_equal "https://inference.celeris.ai/celeris-1-decision", config.api_base
-      assert_equal "CELERIS_API_KEY", config.api_key_env
-      assert_equal "other", config.model
+      assert_equal %w[typesafe:jev-latest cloudflare:clef openrouter:jaredpalmer/kev-4b], config.models.map(&:label)
       assert_in_delta 0.6, config.threshold
-      assert_nil config.cache_path
+      assert_in_delta 0.3, config.warn_at
     end
   end
 
-  def test_switching_provider_drops_the_files_provider_settings
+  def test_model_on_the_command_line_replaces_the_files
     in_project do
-      write(".judgelint.yml", "provider: typesafe\nmodel: jev-preview\nthreshold: 0.6\n")
+      write(".judgelint.yml", "models: [typesafe, cloudflare]\nthreshold: 0.6\n")
+      config = Judgelint::Config.load(overrides: { "models" => "openai" })
 
-      switched = Judgelint::Config.load(overrides: { "provider" => "openai" })
-      assert_equal "gpt-6-luna", switched.model
-      assert_in_delta 0.6, switched.threshold
-
-      same = Judgelint::Config.load(overrides: { "provider" => "typesafe" })
-      assert_equal "jev-preview", same.model
-
-      chosen = Judgelint::Config.load(overrides: { "provider" => "openai", "model" => "gpt-6-luna-mini" })
-      assert_equal "gpt-6-luna-mini", chosen.model
+      assert_equal ["openai:gpt-6-luna"], config.models.map(&:label)
+      assert_in_delta 0.6, config.threshold
     end
+  end
+
+  def test_a_custom_endpoint
+    custom = config(models: [{ "api_base" => "https://gateway.example.com", "model" => "decider", "auth" => "none",
+                               "protocol" => "decisions", "price_per_million" => 0.5, "batch_size" => 8 }]).models.first
+
+    assert_equal "custom:decider", custom.label
+    assert_equal ["decisions", "none", 8], [custom.protocol, custom.auth, custom.batch_size]
+    assert_in_delta 0.5, custom.price_per_million
+  end
+
+  def test_presets_fill_protocol_path_auth_and_limits
+    openai = endpoint(provider: "openai")
+    assert_equal ["decisions", "/v1/decisions", "bearer"], [openai.protocol, openai.path, openai.auth]
+
+    cloudflare = endpoint(provider: "cloudflare")
+    assert_equal "/@cf/cloudflare/{model}", cloudflare.path
+    assert_equal 64, cloudflare.batch_size
+    assert_includes cloudflare.api_base, "${CLOUDFLARE_ACCOUNT_ID}", "the client expands variables when it sends"
+
+    assert_nil endpoint(provider: "typesafe", model: "some-new-jev").price_per_million, "no price for an unknown model"
   end
 
   def test_rejects_unknown_keys_and_bad_values
     in_project do
-      write(".judgelint.yml", "modle: jev\n")
-      assert_raises(Judgelint::ConfigError) { Judgelint::Config.load }
-
-      write(".judgelint.yml", "threshold: 0.3\nwarn_at: 0.5\n")
-      assert_raises(Judgelint::ConfigError) { Judgelint::Config.load }
+      ["provider: typesafe\n", "threshold: high\n", "threshold: 2\n", "models: []\n", "models: [{modle: x}]\n"].each do |yaml|
+        write(".judgelint.yml", yaml)
+        assert_raises(Judgelint::ConfigError, yaml) { Judgelint::Config.load }
+      end
     end
-  end
-
-  def test_presets_fill_protocol_path_auth_and_batch_size
-    openai = config(provider: "openai")
-    assert_equal ["decisions", "/v1/decisions", "bearer"], [openai.protocol, openai.path, openai.auth]
-
-    cloudflare = config(provider: "cloudflare")
-    assert_equal "/@cf/cloudflare/{model}", cloudflare.path
-    assert_equal 64, cloudflare.batch_size
-
-    databricks = config(provider: "databricks", batch_size: 8)
-    assert_equal ["system_one", "basic", 8], [databricks.protocol, databricks.auth, databricks.batch_size]
   end
 
   def test_numbers_in_exponent_form
     assert_in_delta 1.0e-07, config(max_cost_usd: 0.0000001).max_cost_usd
-  end
-
-  def test_variables_are_left_for_the_client_to_expand
-    assert_includes config(provider: "cloudflare").api_base, "${CLOUDFLARE_ACCOUNT_ID}"
   end
 end

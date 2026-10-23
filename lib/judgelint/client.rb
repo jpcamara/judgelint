@@ -1,9 +1,9 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # Asks a decision model the rules over Net::HTTP, in whichever protocol the
-  # provider speaks. Plain Net::HTTP rather than a gem keeps the same code
-  # compiling with Spinel.
+  # Asks one model (an Endpoint) the questions over Net::HTTP, in whichever
+  # protocol its provider speaks. Plain Net::HTTP rather than a gem keeps the
+  # same code compiling with Spinel.
   class Client
     RETRY_STATUSES = %w[408 429 500 502 503 504 529].freeze
     # The native binary links OpenSSL statically, so it looks for certificates
@@ -11,16 +11,16 @@ module Judgelint
     # system's bundle: macOS and Alpine, Debian and Ubuntu, then Fedora and RHEL.
     CA_BUNDLES = %w[/etc/ssl/cert.pem /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt].freeze
 
-    attr_reader :usage
+    attr_reader :usage, :endpoint
 
-    def initialize(config, usage: Usage.new(config.price_per_million), sleeper: ->(seconds) { sleep(seconds) })
+    def initialize(endpoint, usage: Usage.new, sleeper: ->(seconds) { sleep(seconds) })
       if RUBY_ENGINE == "spinel" && ENV.fetch("SSL_CERT_FILE", "").empty?
         bundle = CA_BUNDLES.find { |path| File.file?(path) }
         ENV["SSL_CERT_FILE"] = bundle if bundle
       end
-      @config = config
-      @protocol = Protocol::ALL.fetch(config.protocol) do
-        raise ConfigError, "protocol is system_one or decisions, not #{config.protocol}"
+      @endpoint = endpoint
+      @protocol = Protocol::ALL.fetch(endpoint.protocol) do
+        raise ConfigError, "protocol is system_one or decisions, not #{endpoint.protocol}"
       end
       @usage = usage
       @sleeper = sleeper
@@ -31,12 +31,12 @@ module Judgelint
     # or nil for a question the model refused.
     def judge(state, questions)
       data = self.class.unwrap(post(JSON.generate(payload(state, questions))))
-      @usage.record(data)
+      @usage.record(data, @endpoint.price_per_million)
       @protocol.parse(data, questions)
     end
 
     def payload(state, questions)
-      @protocol.payload(@config.model, state, questions).merge(@config.provider_options)
+      @protocol.payload(@endpoint.model, state, questions).merge(@endpoint.provider_options)
     end
 
     # A conservative token count for code: three bytes a token.
@@ -50,8 +50,8 @@ module Judgelint
     end
 
     def url
-      base = Config.expand(@config.api_base)
-      path = Config.expand(@config.path).gsub("{model}", @config.model.to_s)
+      base = Config.expand(@endpoint.api_base)
+      path = Config.expand(@endpoint.path).gsub("{model}", @endpoint.model.to_s)
       "#{base.delete_suffix('/')}/#{path.delete_prefix('/')}"
     end
 
@@ -89,25 +89,25 @@ module Judgelint
     private
 
     def check_settings
-      provider = @config.provider
-      if @config.api_base.to_s.empty?
-        raise ConfigError, "Provider #{provider} needs #{@config.needs || 'api_base'} in .judgelint.yml"
+      provider = @endpoint.provider
+      if @endpoint.api_base.to_s.empty?
+        raise ConfigError, "Provider #{provider} needs #{@endpoint.needs || 'api_base'} in .judgelint.yml"
       end
       raise ConfigError, "Provider #{provider} needs a model in .judgelint.yml" if model_needed?
-      raise ConfigError, "Set #{@config.api_key_env} to your #{provider} API key" if key_missing?
+      raise ConfigError, "Set #{@endpoint.api_key_env} to your #{provider} API key" if key_missing?
 
-      unless %w[bearer basic none].include?(@config.auth) || @config.auth.start_with?("header:")
-        raise ConfigError, "auth is bearer, basic, none, or header:<name>, not #{@config.auth}"
+      unless %w[bearer basic none].include?(@endpoint.auth) || @endpoint.auth.start_with?("header:")
+        raise ConfigError, "auth is bearer, basic, none, or header:<name>, not #{@endpoint.auth}"
       end
     end
 
     # llama.cpp serves one model and doesn't need its name; nothing else can guess it.
     def model_needed?
-      @config.model.to_s.empty? && @config.provider != "llamacpp"
+      @endpoint.model.to_s.empty? && @endpoint.provider != "llamacpp"
     end
 
     def key_missing?
-      @config.auth != "none" && !@config.api_key_env.to_s.empty? && @config.api_key.to_s.empty?
+      @endpoint.auth != "none" && !@endpoint.api_key_env.to_s.empty? && @endpoint.api_key.to_s.empty?
     end
 
     def post(body)
@@ -121,11 +121,11 @@ module Judgelint
         return parse_json(response.body.to_s) if code.start_with?("2")
 
         detail = self.class.error_detail(response.body.to_s)
-        if RETRY_STATUSES.include?(code) && attempt <= @config.retries
+        if RETRY_STATUSES.include?(code) && attempt <= Endpoint::RETRIES
           @sleeper.call(retry_delay(response, attempt))
           next
         end
-        raise ApiError, "#{@config.provider} answered #{code}: #{detail}"
+        raise ApiError, "#{@endpoint.label} answered #{code}: #{detail}"
       end
     end
 
@@ -134,34 +134,37 @@ module Judgelint
       uri = URI(url)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
-      http.open_timeout = @config.timeout
-      http.read_timeout = @config.timeout
+      http.open_timeout = Endpoint::TIMEOUT
+      http.read_timeout = Endpoint::TIMEOUT
 
       request = Net::HTTP::Post.new(uri.request_uri)
       request["Content-Type"] = "application/json"
       request["Accept"] = "application/json"
       authorize(request)
-      @config.headers.each { |name, value| request[name.to_s] = Config.expand(value.to_s) }
+      @endpoint.headers.each { |name, value| request[name.to_s] = Config.expand(value.to_s) }
       request.body = body
       http.request(request)
     rescue Judgelint::Error
       raise
     rescue StandardError => e
-      raise ApiError, "Couldn't reach #{@config.provider} at #{url}: #{e.message}" if attempt > @config.retries
+      # Nothing listening isn't going to change in a few seconds; a dropped or
+      # stalled connection might.
+      refused = e.is_a?(Errno::ECONNREFUSED) || e.message.include?("Connection refused")
+      raise ApiError, "Couldn't reach #{@endpoint.label} at #{url}: #{e.message}" if refused || attempt > Endpoint::RETRIES
 
       @sleeper.call(2.0**attempt)
       nil
     end
 
     def authorize(request)
-      key = @config.api_key
+      key = @endpoint.api_key
       return if key.to_s.empty?
 
-      case @config.auth
+      case @endpoint.auth
       when "bearer" then request["Authorization"] = "Bearer #{key}"
       when "basic" then request["Authorization"] = "Basic #{["token:#{key}"].pack("m0")}"
       when "none" then nil
-      else request[@config.auth.delete_prefix("header:")] = key
+      else request[@endpoint.auth.delete_prefix("header:")] = key
       end
     end
 
@@ -173,7 +176,7 @@ module Judgelint
     def parse_json(body)
       JSON.parse(body)
     rescue JSON::ParserError
-      raise ApiError, "#{@config.provider} answered with something other than JSON: #{body[0, 200]}"
+      raise ApiError, "#{@endpoint.label} answered with something other than JSON: #{body[0, 200]}"
     end
   end
 end

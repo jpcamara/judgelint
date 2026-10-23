@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "timeout"
 
 class RunnerTest < Minitest::Test
   include ProjectHelpers
@@ -155,13 +156,11 @@ class RunnerTest < Minitest::Test
     in_project do
       write("app/a.rb", "x")
       client = FakeClient.new { nil }
-      cached = config(cache: ".judgelint/cache.json")
-
-      verdict = judge([rule], client, ["app/a.rb"], config: cached).first
+      verdict = judge([rule], client, ["app/a.rb"], cache: ".judgelint/cache.json").first
       assert_equal :refused, verdict.status
       refute verdict.failing?
 
-      judge([rule], client, ["app/a.rb"], config: cached)
+      judge([rule], client, ["app/a.rb"], cache: ".judgelint/cache.json")
       assert_equal 2, client.calls.size
     end
   end
@@ -169,8 +168,8 @@ class RunnerTest < Minitest::Test
   def test_a_file_over_the_token_budget_is_skipped_before_anything_is_sent
     in_project do
       write("app/a.rb", "x" * 400)
-      client = FakeClient.new { 0.9 }
-      runner = runner([rule], client, config(max_state_tokens: 100))
+      client = FakeClient.new(max_state_tokens: 100) { 0.9 }
+      runner = runner([rule], client)
       jobs = runner.plan(["app/a.rb"])
 
       assert_equal 0, runner.request_count(jobs)
@@ -182,28 +181,66 @@ class RunnerTest < Minitest::Test
   def test_packs_questions_by_tokens_and_count
     in_project do
       write("app/a.rb", "x\n" * 200)
-      client = FakeClient.new { 0.1 }
-      runner = runner([rule("a"), rule("b")], client, config(batch_size: 4))
+      client = FakeClient.new(batch_size: 4) { 0.1 }
+      runner = runner([rule("a"), rule("b")], client)
       jobs = runner.plan(["app/a.rb"])
 
       assert_equal [4, 4, 2], jobs.first.requests.map { |request| request.questions.size }
       assert_equal 3, runner.request_count(jobs)
       assert_equal jobs.first.requests.sum(&:tokens), runner.estimated_tokens(jobs)
 
-      small = runner([rule("a"), rule("b")], client, config(max_request_tokens: 120)).plan(["app/a.rb"])
+      small = runner([rule("a"), rule("b")], FakeClient.new(max_request_tokens: 120) { 0.1 }).plan(["app/a.rb"])
       assert_operator small.first.requests.size, :>, 3
     end
   end
 
-  def test_repeat_averages_samples
+  def test_every_model_is_asked_and_their_answers_averaged
+    in_project do
+      write("app/a.rb", "x\n" * 50)
+      jev = FakeClient.new(model: "jev") { 0.9 }
+      clef = FakeClient.new(model: "clef") { |_state, question| question.first == 1 ? 0.5 : nil }
+      verdict = judge([rule], [jev, clef], ["app/a.rb"]).first
+
+      assert_equal [%w[smell.1-40 smell.41-50]], jev.calls.map(&:last)
+      assert_equal [%w[smell.1-40 smell.41-50]], clef.calls.map(&:last)
+      assert_in_delta 0.9, verdict.probability, 0.001, "41-50: clef refused, so it's jev's 0.9 alone"
+      assert_equal [41, 50], verdict.lines
+    end
+  end
+
+  def test_each_models_answers_are_cached_on_their_own
     in_project do
       write("app/a.rb", "x")
-      samples = [0.6, 0.9, 0.9]
-      client = FakeClient.new { samples.shift }
-      verdict = judge([rule], client, ["app/a.rb"], config: config(repeat: 3)).first
+      jev = FakeClient.new(model: "jev") { 0.2 }
+      judge([rule], jev, ["app/a.rb"], cache: ".judgelint/cache.json")
 
-      assert_equal 3, client.calls.size
-      assert_in_delta 0.8, verdict.probability
+      clef = FakeClient.new(model: "clef") { 0.8 }
+      verdict = judge([rule], [jev, clef], ["app/a.rb"], cache: ".judgelint/cache.json").first
+
+      assert_equal 1, jev.calls.size, "jev's answer came from the cache"
+      assert_equal 1, clef.calls.size
+      assert_in_delta 0.5, verdict.probability
+    end
+  end
+
+  def test_a_files_requests_go_out_at_once
+    in_project do
+      write("app/a.rb", "x\n" * 200)
+      started = Queue.new
+      release = Queue.new
+      client = FakeClient.new(batch_size: 2) do |_state, _question|
+        started << true
+        release.pop
+        0.1
+      end
+      runner = runner([rule("a"), rule("b")], client)
+      jobs = runner.plan(["app/a.rb"])
+      worker = Thread.new { runner.execute(jobs) }
+      5.times { Timeout.timeout(2) { started.pop } }
+
+      assert_equal 5, jobs.first.requests.size, "all five requests were in flight before any returned"
+      10.times { release << true }
+      worker.join
     end
   end
 
@@ -246,19 +283,19 @@ class RunnerTest < Minitest::Test
     in_project do
       write("app/a.rb", "x")
       client = FakeClient.new { 0.9 }
-      cached = config(cache: ".judgelint/cache.json")
+      cached = ".judgelint/cache.json"
 
-      2.times { judge([rule], client, ["app/a.rb"], config: cached) }
+      2.times { judge([rule], client, ["app/a.rb"], cache: cached) }
       assert_equal 1, client.calls.size
 
       write("app/a.rb", "y")
-      judge([rule], client, ["app/a.rb"], config: cached)
+      judge([rule], client, ["app/a.rb"], cache: cached)
       assert_equal 2, client.calls.size
 
-      judge([rule(question: "Reworded?")], client, ["app/a.rb"], config: cached)
+      judge([rule(question: "Reworded?")], client, ["app/a.rb"], cache: cached)
       assert_equal 3, client.calls.size
 
-      judge([rule(severity: "warning", threshold: 0.9)], client, ["app/a.rb"], config: cached)
+      judge([rule(severity: "warning", threshold: 0.9)], client, ["app/a.rb"], cache: cached)
       assert_equal 3, client.calls.size, "severity and threshold aren't shown to the model"
     end
   end
@@ -279,7 +316,7 @@ class RunnerTest < Minitest::Test
         sleep(rand / 100)
         state.include?("SMELL") ? 0.9 : 0.1
       end
-      verdicts = judge([rule], client, paths, config: config(threads: 6))
+      verdicts = judge([rule], client, paths)
 
       assert_equal paths, verdicts.map(&:path)
       assert_equal(paths.each_index.map { |index| index.even? ? :violation : :pass }, verdicts.map(&:status))
@@ -313,12 +350,12 @@ class RunnerTest < Minitest::Test
 
   private
 
-  def runner(rules, client, config = self.config)
-    Judgelint::Runner.new(config: config, rules: rules, client: client, cache: Judgelint::Cache.new(config.cache_path))
+  def runner(rules, clients, cache: nil)
+    Judgelint::Runner.new(config: config, rules: rules, clients: Array(clients), cache: Judgelint::Cache.new(cache))
   end
 
-  def judge(rules, client, paths, config: self.config, changes: nil, directories: [])
-    runner = runner(rules, client, config)
+  def judge(rules, clients, paths, cache: nil, changes: nil, directories: [])
+    runner = runner(rules, clients, cache: cache)
     runner.execute(runner.plan(paths, directories: directories, changes: changes)).flatten
   end
 end

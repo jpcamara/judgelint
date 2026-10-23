@@ -84,7 +84,7 @@ module Judgelint
       counts = verdicts.group_by(&:status).transform_values(&:size)
       {
         "version" => VERSION,
-        "model" => config.model_label,
+        "models" => config.models.map(&:label),
         "files" => file_count,
         "summary" => STATUSES.to_h { |status| [status, counts.fetch(status.to_sym, 0)] },
         "usage" => usage.to_h,

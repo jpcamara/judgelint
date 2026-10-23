@@ -71,12 +71,15 @@ end
 # Answers from a block instead of a model, and records each request as
 # [state, question keys].
 class FakeClient
-  attr_reader :calls
+  attr_reader :calls, :endpoint
 
-  def initialize(&answer)
+  # +limits+ are Endpoint settings: batch_size, max_state_tokens, and so on.
+  def initialize(model: "fake", **limits, &answer)
     @answer = answer
     @calls = []
     @lock = Mutex.new
+    @endpoint = Judgelint::Endpoint.new({ "provider" => "fake", "model" => model, "price_per_million" => 1 }
+                                          .merge(limits.transform_keys(&:to_s)))
   end
 
   def judge(state, questions)
@@ -116,8 +119,13 @@ module ProjectHelpers
     MARKDOWN
   end
 
-  def config(**overrides)
-    Judgelint::Config.new({ "cache" => false }.merge(overrides.transform_keys(&:to_s)))
+  def config(**settings)
+    Judgelint::Config.new(settings.transform_keys(&:to_s))
+  end
+
+  # One model entry, as a mapping under models: would give it.
+  def endpoint(**settings)
+    Judgelint::Endpoint.new(settings.transform_keys(&:to_s))
   end
 
   # A rule as its frontmatter would declare it.

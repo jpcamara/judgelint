@@ -1,33 +1,28 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # Settings from .judgelint.yml, with command-line overrides on top, and the
-  # provider's preset under both.
+  # .judgelint.yml: which models to ask, the threshold, files to ignore, and a
+  # spending limit. Everything else has a fixed value.
+  #
+  #   models: [typesafe, cloudflare:clef]   # ask both and average
+  #   threshold: 0.7
+  #   ignore: ["vendor/**"]
+  #   max_cost_usd: 1.00
   class Config
     FILE = ".judgelint.yml"
-    KEYS = %w[
-      provider model api_base path protocol auth api_key_env headers provider_options price_per_million
-      rules ignore threshold warn_at window_lines repeat threads batch_size max_state_tokens max_request_tokens
-      max_cost_usd full_run_limit timeout retries cache
-    ].freeze
-    # Settings that belong to one provider. Choosing another provider on the
-    # command line drops the file's, so `--provider openai` doesn't ask OpenAI
-    # for the file's Jev model.
-    PROVIDER_KEYS = %w[
-      model api_base path protocol auth api_key_env headers provider_options batch_size price_per_million
-    ].freeze
+    KEYS = %w[models threshold ignore max_cost_usd].freeze
+    RULES_DIR = ".judgelint/rules"
+    CACHE = ".judgelint/cache.json"
+    WINDOW_LINES = 40
+    THREADS = 8
+    # Answers this far below the threshold, or less, are uncertain: reported, never failing.
+    UNCERTAIN_BAND = 0.3
 
-    attr_reader :provider, :model, :api_base, :path, :protocol, :auth, :api_key_env, :headers,
-                :provider_options, :price_per_million, :rules_dir, :ignore, :threshold, :warn_at, :window_lines,
-                :repeat, :threads, :batch_size, :max_state_tokens, :max_request_tokens, :max_cost_usd,
-                :full_run_limit, :timeout, :retries, :cache_path
+    attr_reader :models, :threshold, :ignore, :max_cost_usd
 
+    # +overrides+ replaces the file's settings: --model replaces its models.
     def self.load(path: nil, overrides: {})
-      data = Judgelint.read_yaml(path || FILE, required: !path.nil?)
-      if overrides.key?("provider") && overrides["provider"] != data.fetch("provider", "typesafe").to_s
-        data = data.reject { |key, _value| PROVIDER_KEYS.include?(key) }
-      end
-      new(data.merge(overrides))
+      new(Judgelint.read_yaml(path || FILE, required: !path.nil?).merge(overrides))
     end
 
     # ${VAR} reads the environment, so a URL can carry an account id. The
@@ -45,10 +40,67 @@ module Judgelint
 
     def initialize(data)
       unknown = data.keys - KEYS
-      raise ConfigError, "#{FILE}: unknown keys #{unknown.join(', ')}" unless unknown.empty?
+      raise ConfigError, "#{FILE}: unknown keys #{unknown.join(', ')} (it takes #{KEYS.join(', ')})" unless unknown.empty?
+
+      entries = data.fetch("models", "typesafe")
+      entries = [entries] unless entries.is_a?(Array)
+      raise ConfigError, "models needs at least one model" if entries.empty?
+
+      @models = entries.map { |entry| Endpoint.from(entry) }
+      @threshold = Judgelint.number(data.key?("threshold") ? data["threshold"] : 0.7)
+      raise ConfigError, "threshold must be a number between 0 and 1" unless @threshold&.between?(0.01, 1)
+
+      @ignore = list(data["ignore"])
+      @max_cost_usd = Judgelint.number(data.key?("max_cost_usd") ? data["max_cost_usd"] : 1)
+      raise ConfigError, "max_cost_usd must be a number" if @max_cost_usd.nil?
+    end
+
+    def warn_at
+      [threshold - UNCERTAIN_BAND, 0.0].max
+    end
+
+    def label
+      models.map(&:label).join(" + ")
+    end
+
+    private
+
+    def list(value)
+      return [] if value.nil?
+
+      value.is_a?(Array) ? value.map(&:to_s) : [value.to_s]
+    end
+  end
+
+  # One model to ask, and how to reach it: a provider preset and model id
+  # ("typesafe", "cloudflare:clef", "openrouter:jaredpalmer/kev-4b"), or a
+  # mapping for an endpoint judgelint has no preset for.
+  class Endpoint
+    KEYS = %w[
+      provider model api_base path protocol auth api_key_env headers provider_options
+      price_per_million batch_size max_state_tokens max_request_tokens
+    ].freeze
+    TIMEOUT = 30
+    RETRIES = 3
+
+    attr_reader :provider, :model, :api_base, :path, :protocol, :auth, :api_key_env, :headers,
+                :provider_options, :price_per_million, :batch_size, :max_state_tokens, :max_request_tokens, :needs
+
+    def self.from(entry)
+      return new(entry) if entry.is_a?(Hash)
+
+      provider, model = entry.to_s.split(":", 2)
+      data = { "provider" => provider }
+      data["model"] = model if model && !model.empty?
+      new(data)
+    end
+
+    def initialize(data)
+      unknown = data.keys - KEYS
+      raise ConfigError, "models: unknown keys #{unknown.join(', ')}" unless unknown.empty?
 
       @data = data
-      @provider = data.fetch("provider", "typesafe").to_s
+      @provider = data.fetch("provider", "custom").to_s
       @preset = PROVIDERS.fetch(@provider, {})
       @model = setting("model")
       @api_base = setting("api_base")
@@ -58,41 +110,21 @@ module Judgelint
       @api_key_env = setting("api_key_env")
       @headers = mapping("headers")
       @provider_options = mapping("provider_options")
-      @rules_dir = data.fetch("rules", ".judgelint/rules").to_s
-      # Files no rule ever judges, and READMEs that are never specs.
-      @ignore = list("ignore")
-      @threshold = number("threshold", 0.7)
-      @warn_at = number("warn_at", 0.4)
-      raise ConfigError, "warn_at must be below threshold" unless @warn_at < @threshold
-
       @price_per_million = price
-      @window_lines = count("window_lines", 40)
-      @repeat = count("repeat", 1)
-      @threads = count("threads", 8)
       @batch_size = count("batch_size", 32)
       # A request's state plus its widest question, and a whole request: Jev's
       # 32k and 64k token limits, with room for the estimate to be off.
       @max_state_tokens = count("max_state_tokens", 30_000)
       @max_request_tokens = count("max_request_tokens", 60_000)
-      @max_cost_usd = number("max_cost_usd", 1.0)
-      @full_run_limit = count("full_run_limit", 300)
-      @timeout = number("timeout", 30)
-      @retries = number("retries", 3).to_i
-      cache = data.fetch("cache", ".judgelint/cache.json")
-      @cache_path = cache == false ? nil : cache.to_s
+      @needs = @preset["needs"]
     end
 
-    def model_label
-      "#{provider}/#{model}"
+    def label
+      "#{provider}:#{model}"
     end
 
     def api_key
       api_key_env.to_s.empty? ? nil : ENV.fetch(api_key_env, nil)
-    end
-
-    # What a preset still needs from you, for `judgelint providers` and errors.
-    def needs
-      @preset["needs"]
     end
 
     private
@@ -102,41 +134,29 @@ module Judgelint
       value.nil? ? nil : value.to_s
     end
 
-    def list(key)
-      value = @data.fetch(key, [])
-      value.is_a?(Array) ? value.map(&:to_s) : [value.to_s]
-    end
-
     def mapping(key)
       value = @data.fetch(key, {})
-      raise ConfigError, "#{key} must be a mapping" unless value.is_a?(Hash)
+      raise ConfigError, "models: #{key} must be a mapping" unless value.is_a?(Hash)
 
       value
     end
 
-    # The preset's price is for its default model; another model has no price
-    # unless you set one.
+    # A preset's prices are per model; another model has no price unless the
+    # entry gives one, and its cost shows as unknown.
     def price
-      return number("price_per_million", 0) if @data.key?("price_per_million")
-      return nil unless @preset["price_per_million"] && @model == @preset["model"]
+      return Judgelint.number(@data["price_per_million"]) if @data.key?("price_per_million")
 
-      Judgelint.number(@preset["price_per_million"])
+      prices = @preset["prices"] || {}
+      prices.key?(@model.to_s) ? Judgelint.number(prices[@model.to_s]) : nil
     end
 
     def count(key, default)
-      value = number(key, default).to_i
-      raise ConfigError, "#{key} must be at least 1" if value < 1
-
-      value
-    end
-
-    def number(key, default)
       # Not fetch(key, default): Spinel miscompiles a Float default on a YAML hash.
       value = @data.key?(key) ? @data[key] : @preset[key]
       number = Judgelint.number(value.nil? ? default : value)
-      raise ConfigError, "#{key} must be a number" if number.nil?
+      raise ConfigError, "models: #{key} must be a whole number of at least 1" if number.nil? || number < 1
 
-      number
+      number.to_i
     end
   end
 end

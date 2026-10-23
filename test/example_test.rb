@@ -20,7 +20,7 @@ class ExampleTest < Minitest::Test
 
     Dir.mktmpdir("judgelint-example") do |dir|
       config = File.join(dir, "offline.yml")
-      File.write(config, "provider: typesafe\nmodel: jev-latest\napi_base: http://127.0.0.1:1\nretries: 0\nrepeat: 3\n" \
+      File.write(config, "models: [{provider: typesafe, api_base: \"http://127.0.0.1:1\"}]\n" \
                          "ignore: [\"src/services/_*\", \"src/generated/**\"]\n")
       runners.each do |name, command|
         out, err, status = Open3.capture3({ "TYPESAFE_API_KEY" => "offline" }, *command, "--config", config,

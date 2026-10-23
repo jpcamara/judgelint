@@ -5,10 +5,10 @@ module Judgelint
   module Scaffold
     CONFIG = <<~YAML
       # judgelint settings. See https://github.com/jpcamara/judgelint#configuration
-      provider: typesafe      # `judgelint providers` lists the others
-      model: jev-latest
-      # threshold: 0.7        # violation probability that counts as a violation
-      # ignore: ["vendor/**"] # files no rule judges
+      models: [typesafe]        # `judgelint providers` lists the others; list two to average them
+      # threshold: 0.7
+      # ignore: ["vendor/**"]
+      # max_cost_usd: 1.00
     YAML
 
     # A spec: each bullet is a convention judgelint checks. A README with

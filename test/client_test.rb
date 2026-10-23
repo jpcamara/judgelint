@@ -96,7 +96,7 @@ class ClientTest < Minitest::Test
   end
 
   def test_local_servers_need_no_key_and_llamacpp_needs_no_model
-    Judgelint::Client.new(config(provider: "llamacpp", api_base: @server.base)).judge("x", [question])
+    Judgelint::Client.new(endpoint(provider: "llamacpp", api_base: @server.base)).judge("x", [question])
 
     request = @server.requests.first
     assert_nil request[:authorization]
@@ -129,11 +129,11 @@ class ClientTest < Minitest::Test
 
   def test_gives_up_after_the_retries
     server = StubSystemOne.new(status: 503, body: '{"detail":"down"}')
-    client = Judgelint::Client.new(stub_config(api_base: server.base, retries: 1), sleeper: ->(_) {})
+    client = Judgelint::Client.new(stub_config(api_base: server.base), sleeper: ->(_) {})
 
     error = assert_raises(Judgelint::ApiError) { client.judge("x", [question]) }
-    assert_match(/typesafe answered 503: down/, error.message)
-    assert_equal 2, server.requests.size
+    assert_match(/typesafe:jev-latest answered 503: down/, error.message)
+    assert_equal 4, server.requests.size, "the first try and three retries"
   ensure
     server&.stop
   end
@@ -175,14 +175,27 @@ class ClientTest < Minitest::Test
     server&.stop
   end
 
-  def test_retries_connection_errors_with_backoff_then_gives_up
+  def test_retries_dropped_connections_with_backoff_then_gives_up
+    server = TCPServer.new("127.0.0.1", 0)
+    hangups = Thread.new { loop { server.accept.close } }
     sleeps = []
-    client = Judgelint::Client.new(stub_config(api_base: "http://127.0.0.1:1", retries: 3),
+    client = Judgelint::Client.new(stub_config(api_base: "http://127.0.0.1:#{server.addr[1]}"),
                                    sleeper: ->(seconds) { sleeps << seconds })
 
     error = assert_raises(Judgelint::ApiError) { client.judge("x", [question]) }
-    assert_match(/Couldn't reach typesafe/, error.message)
+    assert_match(/Couldn't reach typesafe:jev-latest/, error.message)
     assert_equal [2.0, 4.0, 8.0], sleeps
+  ensure
+    hangups&.kill
+    server&.close
+  end
+
+  def test_a_refused_connection_fails_at_once
+    sleeps = []
+    client = Judgelint::Client.new(stub_config(api_base: "http://127.0.0.1:1"), sleeper: ->(seconds) { sleeps << seconds })
+
+    assert_raises(Judgelint::ApiError) { client.judge("x", [question]) }
+    assert_empty sleeps
   end
 
   def test_records_usage_and_cost
@@ -215,20 +228,20 @@ class ClientTest < Minitest::Test
 
   def test_says_what_a_preset_still_needs
     with_env("AZURE_API_KEY" => "k") do
-      error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(config(provider: "foundry", model: "m")) }
+      error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(endpoint(provider: "foundry", model: "m")) }
       assert_match(/foundry needs api_base \(your Foundry resource endpoint\)/, error.message)
     end
 
-    error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(config(provider: "ollama")) }
+    error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(endpoint(provider: "ollama")) }
     assert_match(/ollama needs a model/, error.message)
 
-    error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(config(provider: "acme", model: "m")) }
+    error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(endpoint(provider: "acme", model: "m")) }
     assert_match(/acme needs api_base/, error.message)
   end
 
   def test_an_unset_variable_in_the_url_is_a_config_error
     with_env("CLOUDFLARE_ACCOUNT_ID" => nil, "CLOUDFLARE_API_TOKEN" => "k") do
-      error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(config(provider: "cloudflare")).url }
+      error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(endpoint(provider: "cloudflare")).url }
       assert_match(/Set CLOUDFLARE_ACCOUNT_ID/, error.message)
     end
   end
@@ -263,7 +276,7 @@ class ClientTest < Minitest::Test
         overrides = { provider: provider }
         overrides[:api_base] = bases[provider] if bases[provider]
         overrides[:model] = "m" unless Judgelint::PROVIDERS[provider]["model"]
-        assert_equal url, Judgelint::Client.new(config(**overrides)).url, provider
+        assert_equal url, Judgelint::Client.new(endpoint(**overrides)).url, provider
       end
     end
   end
@@ -271,7 +284,7 @@ class ClientTest < Minitest::Test
   private
 
   def stub_config(**overrides)
-    config(api_base: @server.base, api_key_env: "JUDGELINT_TEST_KEY", **overrides)
+    endpoint(provider: "typesafe", api_base: @server.base, api_key_env: "JUDGELINT_TEST_KEY", **overrides)
   end
 
   def client(**overrides)

@@ -15,33 +15,33 @@ module Judgelint
   #
   # ${VAR} in api_base or path reads the environment; {model} in path is the
   # model id. batch_size is the provider's most questions per request.
-  # price_per_million is USD per million input tokens for the default model
-  # (OpenRouter reports each request's cost instead). needs says what a
-  # preset can't fill in for you.
+  # prices are USD per million input tokens, by model (OpenRouter reports
+  # each request's cost instead). needs says what a preset can't fill in.
   PROVIDERS = {
     "typesafe" => {
       "api_base" => "https://api.typesafe.ai", "api_key_env" => "TYPESAFE_API_KEY", "model" => "jev-latest",
-      "price_per_million" => "0.042"
+      "prices" => { "jev-latest" => "0.042", "jev-preview" => "0.042" }
     },
     "openrouter" => {
       "api_base" => "https://openrouter.ai/api", "api_key_env" => "OPENROUTER_API_KEY", "model" => "typesafe/jev-1.13"
     },
     "celeris" => {
       "api_base" => "https://inference.celeris.ai/celeris-1-decision", "api_key_env" => "CELERIS_API_KEY",
-      "model" => "celeris-1-decision", "price_per_million" => "0.04"
+      "model" => "celeris-1-decision", "prices" => { "celeris-1-decision" => "0.04" }
     },
     "cloudflare" => {
       "api_base" => "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/run",
       "path" => "/@cf/cloudflare/{model}", "api_key_env" => "CLOUDFLARE_API_TOKEN", "model" => "clef",
-      "batch_size" => "64", "price_per_million" => "0.24"
+      "batch_size" => "64", "prices" => { "clef" => "0.24" }
     },
     "openai" => {
       "api_base" => "https://api.openai.com", "path" => "/v1/decisions", "protocol" => "decisions",
-      "api_key_env" => "OPENAI_API_KEY", "model" => "gpt-6-luna", "price_per_million" => "0.10"
+      "api_key_env" => "OPENAI_API_KEY", "model" => "gpt-6-luna", "prices" => { "gpt-6-luna" => "0.10" }
     },
     "perplexity" => {
       "api_base" => "https://api.perplexity.ai", "path" => "/v1/decisions", "api_key_env" => "PERPLEXITY_API_KEY",
-      "model" => "pplx-decider-latest", "batch_size" => "128", "price_per_million" => "0.02"
+      "model" => "pplx-decider-latest", "batch_size" => "128",
+      "prices" => { "pplx-decider-latest" => "0.02", "pplx-decider-flash-latest" => "0.01" }
     },
     "vercel" => {
       "api_base" => "https://ai-gateway.vercel.sh/typesafe", "api_key_env" => "AI_GATEWAY_API_KEY",
@@ -55,7 +55,7 @@ module Judgelint
     },
     "hanzo" => {
       "api_base" => "https://api.hanzo.ai", "path" => "/v1/decisions", "api_key_env" => "HANZO_API_KEY",
-      "model" => "kai", "batch_size" => "100", "price_per_million" => "0.021"
+      "model" => "kai", "batch_size" => "100", "prices" => { "kai" => "0.021" }
     },
     "foundry" => {
       "path" => "/providers/microsoft/v1/systemone", "auth" => "header:api-key", "api_key_env" => "AZURE_API_KEY",

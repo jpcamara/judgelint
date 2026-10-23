@@ -7,10 +7,12 @@ module Judgelint
   #
   # Each file's requests carry the whole numbered file as state and one
   # question per rule and window, so a file's verdicts never depend on which
-  # other files ran alongside it. A rule's verdict is its worst window.
+  # other files ran alongside it. Every model is asked every question, all of a
+  # file's requests go out at once, and a question's answer is the models'
+  # average. A rule's verdict is its worst window.
   class Runner
-    # One file's work: the questions to ask, answers the cache already has,
-    # and the requests the rest are packed into.
+    # One file's work: the questions to ask, each model's answers (from the
+    # cache or the model), and the requests still to send.
     class Job
       attr_reader :source, :state, :state_digest, :questions, :suppressed, :answers, :requests, :expected
       attr_accessor :skipped
@@ -23,27 +25,29 @@ module Judgelint
         @state_digest = Digest::SHA256.hexdigest(@state)
         @questions = questions
         @suppressed = suppressed
-        @answers = {}
+        @answers = {} # model index => {question key => probability or nil}
         @requests = []
         @expected = expected
         @skipped = false
       end
     end
 
-    # Questions sent together, and their estimated input tokens.
+    # Questions sent together to one model, and their estimated input tokens.
     class Request
-      attr_reader :questions, :tokens
+      attr_reader :model, :questions, :tokens
 
-      def initialize(questions, tokens)
+      def initialize(model, questions, tokens)
+        @model = model
         @questions = questions
         @tokens = tokens
       end
     end
 
-    def initialize(config:, rules:, client:, cache:)
+    # +clients+ has one Client per model in config.models.
+    def initialize(config:, rules:, clients:, cache:)
       @config = config
       @rules = rules
-      @client = client
+      @clients = clients
       @cache = cache
     end
 
@@ -101,16 +105,25 @@ module Judgelint
     end
 
     def request_count(jobs)
-      jobs.sum { |job| job.requests.size } * @config.repeat
+      jobs.sum { |job| job.requests.size }
     end
 
     def estimated_tokens(jobs)
-      jobs.sum { |job| job.requests.sum(&:tokens) } * @config.repeat
+      jobs.sum { |job| job.requests.sum(&:tokens) }
+    end
+
+    # Nil when a model has no price.
+    def estimated_cost(jobs)
+      requests = jobs.flat_map(&:requests)
+      prices = requests.map { |request| @clients[request.model].endpoint.price_per_million }
+      return nil if prices.include?(nil)
+
+      requests.each_with_index.sum { |request, index| request.tokens * prices[index] / 1_000_000.0 }
     end
 
     # Returns each job's verdicts, in the jobs' order.
     def execute(jobs)
-      Pool.map(jobs, @config.threads) do |job|
+      Pool.map(jobs, Config::THREADS) do |job|
         ask(job)
         verdicts(job)
       end
@@ -135,7 +148,7 @@ module Judgelint
       questions = {}
       suppressed = []
       rules.each do |rule|
-        ranges = rule.ranges(source, @config.window_lines).select { |first, last| touched?(lines, first, last) }
+        ranges = rule.ranges(source, Config::WINDOW_LINES).select { |first, last| touched?(lines, first, last) }
         next if ranges.empty?
 
         kept = ranges.reject { |first, last| source.suppressed?(rule.id, first, last) }
@@ -158,53 +171,65 @@ module Judgelint
       lines == :all || (lines || []).any? { |line| line.between?(first, last) }
     end
 
-    # Packs the questions the cache can't answer into as few requests as fit
-    # the provider's limits. A file whose state and widest question are
-    # already over the limit is skipped: it's reported, never sent.
+    # For each model, packs the questions its cache can't answer into as few
+    # requests as fit its limits. A file whose state and widest question are
+    # over a model's limit is skipped: it's reported, never sent.
     def pack(job)
-      pending = []
-      job.questions.each_value do |questions|
-        questions.each do |question|
-          cached = @cache.fetch(cache_key(question, job))
-          cached.nil? ? pending << question : job.answers[question.key] = cached
+      @clients.each_with_index do |client, model|
+        answers = job.answers[model] = {}
+        pending = []
+        job.questions.each_value do |questions|
+          questions.each do |question|
+            cached = @cache.fetch(cache_key(question, job, client))
+            cached.nil? ? pending << question : answers[question.key] = cached
+          end
         end
-      end
-      return if pending.empty?
+        next if pending.empty?
 
-      base = @client.tokens(job.state, [])
-      sizes = pending.map { |question| @client.question_tokens(question) }
-      if base + sizes.max >= @config.max_state_tokens
-        job.skipped = true
-        return
-      end
-
-      batch = []
-      tokens = base
-      pending.each_with_index do |question, index|
-        if !batch.empty? && (tokens + sizes[index] > @config.max_request_tokens || batch.size >= @config.batch_size)
-          job.requests << Request.new(batch, tokens)
-          batch = []
-          tokens = base
+        limits = client.endpoint
+        base = client.tokens(job.state, [])
+        sizes = pending.map { |question| client.question_tokens(question) }
+        if base + sizes.max >= limits.max_state_tokens
+          job.skipped = true
+          job.requests.clear
+          return
         end
-        batch << question
-        tokens += sizes[index]
+
+        batch = []
+        tokens = base
+        pending.each_with_index do |question, index|
+          if !batch.empty? && (tokens + sizes[index] > limits.max_request_tokens || batch.size >= limits.batch_size)
+            job.requests << Request.new(model, batch, tokens)
+            batch = []
+            tokens = base
+          end
+          batch << question
+          tokens += sizes[index]
+        end
+        job.requests << Request.new(model, batch, tokens)
       end
-      job.requests << Request.new(batch, tokens)
     end
 
-    # With repeat above 1, each request is sent that many times and the answers
-    # averaged, which smooths a model that doesn't answer the same way twice.
+    # Sends every request at once: a file's packed requests and every model's.
     def ask(job)
       state = job.state.dup # Spinel can't yet pass the Job's shared String along
-      job.requests.each do |request|
-        samples = Array.new(@config.repeat) { @client.judge(state, request.questions) }
+      results = Pool.map(job.requests, job.requests.size) do |request|
+        @clients[request.model].judge(state, request.questions)
+      end
+      job.requests.each_with_index do |request, index|
+        client = @clients[request.model]
         request.questions.each do |question|
-          values = samples.map { |answers| answers[question.key] }.compact
-          probability = values.empty? ? nil : values.sum / values.size
-          @cache.store(cache_key(question, job), probability) unless probability.nil?
-          job.answers[question.key] = probability
+          probability = results[index][question.key]
+          @cache.store(cache_key(question, job, client), probability) unless probability.nil?
+          job.answers[request.model][question.key] = probability
         end
       end
+    end
+
+    # The models' average for a question, or nil if every model refused it.
+    def answer(job, question)
+      values = job.answers.values.map { |answers| answers[question.key] }.compact
+      values.empty? ? nil : values.sum / values.size
     end
 
     def verdicts(job)
@@ -217,16 +242,22 @@ module Judgelint
     def verdict_for(rule, path, questions, job)
       return Verdict.new(rule: rule, path: path, probability: nil, status: :skipped) if job.skipped
 
-      answered = questions.reject { |question| job.answers[question.key].nil? }
+      answered = questions.filter_map do |question|
+        probability = answer(job, question)
+        [question, probability] unless probability.nil?
+      end
       return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if answered.empty?
 
-      worst = answered.max_by { |question| rule.violation_probability(job.answers[question.key]) }
+      worst, probability = answered.max_by { |_question, value| rule.violation_probability(value) }
       lines = rule.directory? ? nil : [worst.first, worst.last]
-      Verdict.classify(rule, path, job.answers[worst.key], warn_at: @config.warn_at, lines: lines)
+      Verdict.classify(rule, path, probability, warn_at: @config.warn_at, lines: lines)
     end
 
-    def cache_key(question, job)
-      Cache.key(question.digest, job.state_digest, @config.model_label)
+    # Each model's answers are cached on their own, so adding a model asks
+    # only the new one.
+    def cache_key(question, job, client)
+      endpoint = client.endpoint
+      Cache.key(question.digest, job.state_digest, "#{endpoint.provider}/#{endpoint.model}")
     end
   end
 end

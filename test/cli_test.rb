@@ -95,8 +95,7 @@ class CLITest < Minitest::Test
   def test_api_errors_exit_two
     in_smelly_project do
       runners.each do |name, run|
-        status, _out, err = run.call(["--model", "x", "app/bad.rb"], api_base: "http://127.0.0.1:1",
-                                                                     settings: "retries: 0")
+        status, _out, err = run.call(["app/bad.rb"], api_base: "http://127.0.0.1:1")
         assert_equal 2, status, name
         assert_match(/judgelint: /, err, name)
       end
@@ -106,7 +105,7 @@ class CLITest < Minitest::Test
   def test_openai_decisions_protocol
     in_smelly_project do
       runners.each do |name, run|
-        status, out, = run.call(["app/bad.rb"], settings: "provider: openai")
+        status, out, = run.call(["app/bad.rb"], model: { "provider" => "openai" })
 
         assert_equal 1, status, name
         assert_match(/1 violations/, out, name)
@@ -121,8 +120,8 @@ class CLITest < Minitest::Test
     in_smelly_project do
       runners.each do |name, run|
         ENV["JUDGELINT_TEST_ACCOUNT"] = "acct"
-        settings = "provider: cloudflare\napi_base: #{server.base}/accounts/${JUDGELINT_TEST_ACCOUNT}/ai/run"
-        status, out, = run.call(["app/good.rb"], settings: settings)
+        model = { "provider" => "cloudflare", "api_base" => "#{server.base}/accounts/${JUDGELINT_TEST_ACCOUNT}/ai/run" }
+        status, out, = run.call(["app/good.rb"], model: model)
 
         assert_equal 1, status, name
         assert_match(/0\.95/, out, name)
@@ -137,7 +136,7 @@ class CLITest < Minitest::Test
   def test_basic_auth_and_extra_headers
     in_smelly_project do
       runners.each do |name, run|
-        status, = run.call(["app/good.rb"], settings: "auth: basic\nheaders: { X-Judgelint: yes-please }")
+        status, = run.call(["app/good.rb"], model: { "auth" => "basic", "headers" => { "X-Judgelint" => "yes-please" } })
         assert_equal 0, status, name
       end
     end
@@ -236,26 +235,40 @@ class CLITest < Minitest::Test
   def test_refuses_a_run_over_max_cost_before_sending
     in_smelly_project do
       runners.each do |name, run|
-        status, _out, err = run.call([], settings: "max_cost_usd: 0.0000001")
+        status, _out, err = run.call([], config: { "max_cost_usd" => 0.0000001 })
         assert_equal 2, status, name
         assert_match(/This run would send 2 requests, .* over max_cost_usd/, err, name)
 
-        status, = run.call(["--yes"], settings: "max_cost_usd: 0.0000001")
+        status, = run.call(["--yes"], config: { "max_cost_usd" => 0.0000001 })
         assert_equal 1, status, name
       end
       assert_equal runners.size * 2, @server.requests.size
     end
   end
 
-  def test_full_run_limit
+  def test_two_models_are_both_asked_and_averaged
+    other = StubSystemOne.new(body: { "answers" => { "smell.1-1" => { "type" => "noul", "noul" => 0.5 } } })
     in_smelly_project do
       runners.each do |name, run|
-        status, _out, err = run.call([], settings: "full_run_limit: 1")
-        assert_equal 2, status, name
-        assert_match(/That's 2 files, over full_run_limit \(1\)/, err, name)
+        second = { "provider" => "custom", "model" => "other", "api_base" => other.base, "auth" => "none" }
+        status, out, = run.call(["app/bad.rb"], config: { "models" => [{ "provider" => "typesafe", "api_base" => @server.base,
+                                                                         "api_key_env" => "JUDGELINT_TEST_KEY" }, second] })
 
-        status, = run.call(["app/bad.rb", "app/good.rb"], settings: "full_run_limit: 1")
         assert_equal 1, status, name
+        assert_match(/0\.70/, out, "#{name}: the average of 0.9 and 0.5")
+      end
+    end
+    assert_equal runners.size, other.requests.size
+  ensure
+    other&.stop
+  end
+
+  def test_the_model_flag_replaces_the_configs_models
+    in_smelly_project do
+      runners.each do |name, run|
+        status, _out, err = run.call(["--model", "openai", "app/bad.rb"])
+        assert_equal 2, status, name
+        assert_match(/Set OPENAI_API_KEY/, err, "#{name}: asks OpenAI, not the stub")
       end
     end
   end
@@ -341,7 +354,7 @@ class CLITest < Minitest::Test
 
   def test_a_missing_api_key_is_a_config_error
     in_smelly_project do
-      write(".judgelint.yml", "api_base: #{@server.base}\napi_key_env: JUDGELINT_UNSET_KEY\n")
+      write(".judgelint.yml", "models: [{provider: typesafe, api_base: \"#{@server.base}\", api_key_env: JUDGELINT_UNSET_KEY}]\n")
       out = StringIO.new
       err = StringIO.new
 
@@ -373,29 +386,27 @@ class CLITest < Minitest::Test
     runners
   end
 
-  # Always called inside a temporary project. +settings+ is more YAML, and
-  # its keys win over the defaults here.
-  def env(api_base, settings)
-    defaults = { "api_base" => api_base, "api_key_env" => "JUDGELINT_TEST_KEY", "cache" => "false" }
-    lines = settings.lines.map(&:chomp).reject(&:empty?)
-    given = lines.map { |line| line.split(":", 2).first }
-    defaults.each { |key, value| lines << "#{key}: #{value}" unless given.include?(key) }
-    write(".judgelint.yml", "#{lines.join("\n")}\n")
+  # Always called inside a temporary project. The config asks the stub
+  # server, as Jev, with +model+'s settings on top; +config+ adds top-level
+  # settings. JSON is YAML. Every run passes --no-cache.
+  def env(api_base, model, config)
+    entry = { "provider" => "typesafe", "api_base" => api_base, "api_key_env" => "JUDGELINT_TEST_KEY" }.merge(model)
+    write(".judgelint.yml", JSON.generate({ "models" => [entry] }.merge(config)))
     { "JUDGELINT_TEST_KEY" => "secret" }
   end
 
-  def run_in_process(args, api_base: @server.base, settings: "", extra_env: {})
-    ENV.update(env(api_base, settings).merge(extra_env))
+  def run_in_process(args, api_base: @server.base, model: {}, config: {}, extra_env: {})
+    ENV.update(env(api_base, model, config).merge(extra_env))
     out = StringIO.new
     err = StringIO.new
-    status = Judgelint::CLI.new(args, out: out, err: err).run
+    status = Judgelint::CLI.new(args + ["--no-cache"], out: out, err: err).run
     [status, out.string, err.string]
   ensure
     (["JUDGELINT_TEST_KEY"] + extra_env.keys).each { |key| ENV.delete(key) }
   end
 
-  def run_command(command, args, api_base: @server.base, settings: "", extra_env: {})
-    out, err, status = Open3.capture3(env(api_base, settings).merge(extra_env), *command, *args)
+  def run_command(command, args, api_base: @server.base, model: {}, config: {}, extra_env: {})
+    out, err, status = Open3.capture3(env(api_base, model, config).merge(extra_env), *command, *args, "--no-cache")
     [status.exitstatus, out, err]
   end
 

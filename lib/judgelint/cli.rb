@@ -10,17 +10,16 @@ module Judgelint
     HELP = <<~TEXT
       Usage: judgelint [command] [options] [paths...]
 
-      Lints files against conventions a regular linter can't check. Each rule is a
-      yes/no question answered by a System One decision model (Jev by default).
+      Checks files against conventions written as bullets in READMEs, by asking a
+      System One decision model (Jev by default) whether the code breaks each one.
 
       Commands:
-        check [paths...]   Judge files against the rules that govern them (default).
-                           With no paths, checks every file the rules' globs match.
-        test [rule ids...] Judge each rule's examples (rules/<id>/pass, rules/<id>/fail)
-                           and report how many the model gets right.
-        rules              List rules and how many files each one governs.
+        check [paths...]   Check the files the specs govern, or these (default).
+        test [rule ids...] Judge each rule's examples (.judgelint/examples/<id>/pass
+                           and fail) and report what the model gets wrong.
+        rules              List the rules and how many files each governs.
         providers          List the decision-model providers judgelint knows.
-        init               Write .judgelint.yml and an example rule.
+        init               Write .judgelint.yml and an example spec.
 
       Options:
             --base REF       Check only what changed since the merge base with REF,
@@ -28,12 +27,11 @@ module Judgelint
             --pr             --base the pull request's base branch, from CI variables
                              or the gh CLI
         -f, --format FORMAT  text, json, github (Actions annotations), or sarif
+        -m, --model MODEL    Ask this model instead of the config's: a provider from
+                             `judgelint providers`, optionally :model (cloudflare:clef)
         -c, --config PATH    Config file (default .judgelint.yml)
-            --provider NAME  A provider from `judgelint providers` (default typesafe)
-            --model ID       Decision model id
-            --threshold N    Violation probability that counts as a violation (default 0.7)
-            --no-cache       Ask the model even when an answer is cached
-        -y, --yes            Run even past max_cost_usd or full_run_limit
+            --no-cache       Ask the models even when an answer is cached
+        -y, --yes            Run even past max_cost_usd
         -v, --version        Print the version
         -h, --help           Print this help
 
@@ -51,6 +49,7 @@ module Judgelint
       @yes = false
       @overrides = {}
       @usage = nil
+      @no_cache = false
     end
 
     def run
@@ -81,7 +80,7 @@ module Judgelint
     # Spinel can't compile OptionParser, so the few options are parsed here.
     VALUE_OPTIONS = {
       "-c" => "config", "--config" => "config", "-f" => "format", "--format" => "format", "--base" => "base",
-      "--provider" => "provider", "--model" => "model", "--threshold" => "threshold"
+      "-m" => "models", "--model" => "models"
     }.freeze
 
     def parse_options(argv)
@@ -98,7 +97,7 @@ module Judgelint
 
           set_option(VALUE_OPTIONS.fetch(name), value)
         elsif arg == "--no-cache"
-          @overrides["cache"] = false
+          @no_cache = true
         elsif arg == "--pr"
           @pr = true
         elsif %w[-y --yes].include?(arg)
@@ -136,11 +135,6 @@ module Judgelint
       paths = check_paths(rules, changes).reject { |path| Glob.match_any?(config.ignore, path) }
       directories = check_directories(rules).reject { |dir| Glob.match_any?(config.ignore, dir) }
       units = paths.size + directories.size
-      if @argv.empty? && changes.nil? && units > config.full_run_limit && !@yes
-        what = directories.empty? ? "files" : "files and directories"
-        raise ConfigError, "That's #{units} #{what}, over full_run_limit (#{config.full_run_limit}). " \
-                           "Check a change with --base or --pr, name paths, or pass --yes."
-      end
       runner = runner(config, rules)
       jobs = runner.plan(paths, directories: directories, changes: changes)
       guard_cost(config, runner, jobs)
@@ -199,7 +193,7 @@ module Judgelint
 
     # Prices the planned requests and refuses a run over max_cost_usd.
     def guard_cost(config, runner, jobs)
-      estimate = Usage.estimate(runner.estimated_tokens(jobs), config.price_per_million)
+      estimate = runner.estimated_cost(jobs)
       return if estimate.nil? || estimate <= config.max_cost_usd || @yes
 
       raise ConfigError, format("This run would send %d requests, about %s input tokens ($%.2f), over max_cost_usd " \
@@ -234,13 +228,13 @@ module Judgelint
 
     def load_rules
       config = Config.load(path: @config_path, overrides: @overrides)
-      [config, Spec.discover(rules_dir: config.rules_dir, default_threshold: config.threshold, ignore: config.ignore)]
+      [config, Spec.discover(rules_dir: Config::RULES_DIR, default_threshold: config.threshold, ignore: config.ignore)]
     end
 
     def runner(config, rules)
-      client = Client.new(config)
-      @usage = client.usage
-      Runner.new(config: config, rules: rules, client: client, cache: Cache.new(config.cache_path))
+      @usage = Usage.new
+      clients = config.models.map { |endpoint| Client.new(endpoint, usage: @usage) }
+      Runner.new(config: config, rules: rules, clients: clients, cache: Cache.new(@no_cache ? nil : Config::CACHE))
     end
   end
 end

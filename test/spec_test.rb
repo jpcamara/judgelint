@@ -130,8 +130,7 @@ class SpecTest < Minitest::Test
   def test_ignore_keeps_files_out_of_a_check
     in_project do
       write("src/services/README.md", SERVICES)
-      write(".judgelint.yml", "ignore: [\"src/services/_*\"]\ncache: false\napi_base: http://127.0.0.1:1\n" \
-                              "api_key_env: JUDGELINT_UNSET\nauth: none\n")
+      write(".judgelint.yml", "ignore: [\"src/services/_*\"]\nmodels: [{api_base: \"http://127.0.0.1:1\", model: m, auth: none}]\n")
       write("src/services/_wip.ts", "throw new Error()\n")
       out = StringIO.new
       err = StringIO.new
