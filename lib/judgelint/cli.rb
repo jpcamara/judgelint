@@ -133,17 +133,24 @@ module Judgelint
 
       base = @pr ? Changes.pr_base : @base
       changes = base ? Changes.since(base) : nil
-      paths = check_paths(config, rules, changes)
+      paths = check_paths(rules, changes)
+      directories = check_directories(rules)
+      units = paths.size + directories.size
+      if @argv.empty? && changes.nil? && units > config.full_run_limit && !@yes
+        what = directories.empty? ? "files" : "files and directories"
+        raise ConfigError, "That's #{units} #{what}, over full_run_limit (#{config.full_run_limit}). " \
+                           "Check a change with --base or --pr, name paths, or pass --yes."
+      end
       runner = runner(config, rules)
-      jobs = runner.plan(paths, changes: changes)
+      jobs = runner.plan(paths, directories: directories, changes: changes)
       guard_cost(config, runner, jobs)
       verdicts = runner.execute(jobs).flatten
-      Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: paths.size, usage: @usage)
+      Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: units, usage: @usage)
       @err.puts @usage.line
       verdicts.any?(&:failing?) ? 1 : 0
     end
 
-    def check_paths(config, rules, changes)
+    def check_paths(rules, changes)
       if !@argv.empty?
         paths = Glob.expand_arguments(@argv)
         missing = paths.reject { |path| File.file?(path) }
@@ -155,12 +162,17 @@ module Judgelint
       else
         paths = Glob.expand(rules.flat_map(&:paths))
       end
-      paths = paths.select { |path| rules.any? { |rule| rule.applies_to?(path) } }
-      if @argv.empty? && changes.nil? && paths.size > config.full_run_limit && !@yes
-        raise ConfigError, "That's #{paths.size} files, over full_run_limit (#{config.full_run_limit}). " \
-                           "Check a change with --base or --pr, name paths, or pass --yes."
-      end
-      paths
+      paths.select { |path| rules.any? { |rule| !rule.directory? && rule.applies_to?(path) } }
+    end
+
+    # The directories directory rules govern; with paths named, those the
+    # paths are in or are. With a change, the runner keeps those it touched.
+    def check_directories(rules)
+      directories = rules.select(&:directory?).flat_map(&:directories).uniq.sort
+      return directories if @argv.empty?
+
+      named = @argv.map { |arg| arg.delete_prefix("./").delete_suffix("/") }
+      directories.select { |dir| named.any? { |path| path == dir || path.start_with?("#{dir}/") || dir.start_with?("#{path}/") } }
     end
 
     def test
@@ -194,8 +206,8 @@ module Judgelint
     def list_rules
       _config, rules = load_rules
       rules.each do |rule|
-        count = Glob.expand(rule.paths).count { |path| rule.applies_to?(path) }
-        @out.puts format("%-24s %-8s %5d files  %s", rule.id, rule.severity, count, rule.question)
+        count = rule.directory? ? "#{rule.directories.size} dirs" : "#{Glob.expand(rule.paths).count { |path| rule.applies_to?(path) }} files"
+        @out.puts format("%-24s %-8s %10s  %s", rule.id, rule.severity, count, rule.question)
       end
       0
     end

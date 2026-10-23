@@ -12,8 +12,8 @@ module Judgelint
       @lock = Mutex.new
     end
 
-    def self.key(question_digest, state, model_label)
-      Digest::SHA256.hexdigest([question_digest, Digest::SHA256.hexdigest(state), model_label].join(":"))
+    def self.key(question_digest, state_digest, model_label)
+      Digest::SHA256.hexdigest([question_digest, state_digest, model_label].join(":"))
     end
 
     def fetch(key)

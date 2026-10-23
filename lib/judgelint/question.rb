@@ -22,7 +22,8 @@ module Judgelint
       text = rule.window? ? "Look at lines #{first}-#{last} of the file; the rest is context. #{rule.question}" : rule.question
       return text unless rule.fail_when == "yes"
 
-      scope = rule.window? ? "those lines do it" : "the code does it"
+      scope = { "window" => "those lines do it", "file" => "the code does it", "directory" => "the files do it" }
+              .fetch(rule.scope)
       "#{text} Answer yes only when #{scope}, not when the question doesn't apply."
     end
 
@@ -35,7 +36,7 @@ module Judgelint
     end
 
     def digest
-      Digest::SHA256.hexdigest(JSON.generate([instructions, yes_means.to_s, no_means.to_s]))
+      @digest ||= Digest::SHA256.hexdigest(JSON.generate([instructions, yes_means.to_s, no_means.to_s]))
     end
   end
 end

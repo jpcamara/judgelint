@@ -87,6 +87,10 @@ class FakeClient
   def tokens(state, questions)
     JSON.generate(Judgelint::Protocol::SystemOne.payload("m", state, questions)).bytesize / 3
   end
+
+  def question_tokens(question)
+    (JSON.generate(Judgelint::Protocol::SystemOne.render(question)).bytesize + question.key.bytesize + 6) / 3
+  end
 end
 
 module ProjectHelpers

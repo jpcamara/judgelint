@@ -44,6 +44,11 @@ module Judgelint
       JSON.generate(payload(state, questions)).bytesize / 3
     end
 
+    # What one more question adds to a request, without serializing the file again.
+    def question_tokens(question)
+      (JSON.generate(@protocol.render(question)).bytesize + question.key.bytesize + 6) / 3
+    end
+
     def url
       base = Config.expand(@config.api_base)
       path = Config.expand(@config.path).gsub("{model}", @config.model.to_s)

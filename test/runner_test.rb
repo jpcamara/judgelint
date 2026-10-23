@@ -56,6 +56,81 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_a_directory_rule_judges_each_directory_as_one_unit
+    in_project do
+      write("app/features/a/index.rb", "one\n")
+      write("app/features/a/helper.rb", "SMELL\n")
+      write("app/features/b/index.rb", "fine\n")
+      write("app/types.rb", "Types = 1\n")
+      rule = rule("cohesive", scope: "directory", paths: ["app/features/*"], context: ["app/types.rb"])
+      client = FakeClient.new { |state, _question| state.include?("SMELL") ? 0.9 : 0.1 }
+      verdicts = judge([rule], client, [], directories: %w[app/features/a app/features/b])
+
+      assert_equal %w[app/features/a app/features/b], verdicts.map(&:path)
+      assert_equal %i[violation pass], verdicts.map(&:status)
+      assert_nil verdicts.first.lines
+      assert_equal <<~STATE, client.calls.first.first
+        Directory: app/features/a
+
+        Path: app/features/a/helper.rb
+
+        1: SMELL
+
+        Path: app/features/a/index.rb
+
+        1: one
+
+        Context, for reference only (not under review):
+
+        Path: app/types.rb
+
+        Types = 1
+      STATE
+    end
+  end
+
+  def test_rules_with_different_context_get_their_own_requests
+    in_project do
+      write("app/a.rb", "x\n")
+      write("app/types.rb", "T\n")
+      client = FakeClient.new { 0.1 }
+      judge([rule("plain"), rule("typed", context: ["app/types.rb"])], client, ["app/a.rb"])
+
+      assert_equal [%w[plain.1-1], %w[typed.1-1]], client.calls.map(&:last)
+      assert_includes client.calls.last.first, "Path: app/types.rb"
+      refute_includes client.calls.first.first, "app/types.rb"
+    end
+  end
+
+  def test_a_change_inside_a_directory_brings_the_directory_in
+    in_project do
+      write("app/features/a/index.rb", "x\n")
+      write("app/features/b/index.rb", "x\n")
+      client = FakeClient.new { 0.1 }
+      rule = rule("cohesive", scope: "directory", paths: ["app/features/*"])
+      judge([rule], client, [], directories: %w[app/features/a app/features/b],
+                                changes: { "app/features/b/index.rb" => [1] })
+
+      assert_equal 1, client.calls.size
+      assert_includes client.calls.first.first, "Directory: app/features/b"
+    end
+  end
+
+  def test_directory_examples_are_the_directories_under_pass_and_fail
+    in_project do
+      write(".judgelint/rules/cohesive/fail/orphan/index.rb", "x\n")
+      write(".judgelint/rules/cohesive/fail/orphan/unused.rb", "SMELL\n")
+      write(".judgelint/rules/cohesive/pass/tidy/index.rb", "x\n")
+      rule = rule("cohesive", scope: "directory", paths: ["app/features/*"])
+      client = FakeClient.new { |state, _question| state.include?("SMELL") ? 0.9 : 0.1 }
+      runner = runner([rule], client)
+      examples = runner.execute(runner.plan_examples).flatten
+
+      assert_equal [true, true], examples.map(&:correct?)
+      assert_equal(["Directory: tidy", "Directory: orphan"], client.calls.map { |state, _keys| state.lines.first.chomp })
+    end
+  end
+
   def test_thresholds_and_the_uncertain_band
     in_project do
       write("app/a.rb", "x")
@@ -242,8 +317,8 @@ class RunnerTest < Minitest::Test
     Judgelint::Runner.new(config: config, rules: rules, client: client, cache: Judgelint::Cache.new(config.cache_path))
   end
 
-  def judge(rules, client, paths, config: self.config, changes: nil)
+  def judge(rules, client, paths, config: self.config, changes: nil, directories: [])
     runner = runner(rules, client, config)
-    runner.execute(runner.plan(paths, changes: changes)).flatten
+    runner.execute(runner.plan(paths, directories: directories, changes: changes)).flatten
   end
 end

@@ -18,6 +18,11 @@
   questions are packed into requests, and runs over `max_cost_usd` or
   `full_run_limit` need `--yes`. Each run prints its requests, tokens, and cost.
 - `judgelint test` requires pass and fail examples for every rule.
+- `scope: directory` judges each directory a rule's paths match as one unit,
+  for conventions about how files relate, and `context:` sends files the
+  model reads but never judges.
+- examples/scoop-society: praxis's TypeScript demo with its three specs as
+  rules, checked against praxis's verdicts from a committed cache.
 - `repeat`, `threads`, retries on connection errors, inline
   `judgelint:disable` comments with a required reason, and `--format github`
   and `--format sarif`.

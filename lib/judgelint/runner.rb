@@ -12,11 +12,15 @@ module Judgelint
     # One file's work: the questions to ask, answers the cache already has,
     # and the requests the rest are packed into.
     class Job
-      attr_reader :source, :questions, :suppressed, :answers, :requests, :expected
+      attr_reader :source, :state, :state_digest, :questions, :suppressed, :answers, :requests, :expected
       attr_accessor :skipped
 
+      # The state is built and hashed once: it's the whole file, and every
+      # question's cache key needs its hash.
       def initialize(source, questions, suppressed, expected: nil)
         @source = source
+        @state = source.state
+        @state_digest = Digest::SHA256.hexdigest(@state)
         @questions = questions
         @suppressed = suppressed
         @answers = {}
@@ -44,12 +48,21 @@ module Judgelint
     end
 
     # +changes+ ({path => lines or :all}, from Changes.since) limits each file
-    # to the windows a change touched.
-    def plan(paths, changes: nil)
-      paths.map do |path|
-        lines = changes ? changes[path] : :all
-        plan_file(Source.new(path), @rules.select { |rule| rule.applies_to?(path) }, lines)
+    # to the windows a change touched, and directories to those with a change.
+    # Rules that read different context files can't share a request, so a
+    # file gets one job per set of context files.
+    def plan(paths, directories: [], changes: nil)
+      files = paths.flat_map do |path|
+        rules = @rules.select { |rule| !rule.directory? && rule.applies_to?(path) }
+        by_context(rules) { |context, group| plan_file(Source.new(path, context: context), group, changes ? changes[path] : :all) }
       end
+      units = directories.flat_map do |dir|
+        next [] if changes && changes.keys.none? { |path| path.start_with?("#{dir}/") }
+
+        rules = @rules.select { |rule| rule.directory? && rule.applies_to?(dir) }
+        by_context(rules) { |context, group| plan_file(Source.directory(dir, context: context), group, :all) }
+      end
+      files + units
     end
 
     # Files under rules/<id>/pass must not be judged violations, files under
@@ -62,10 +75,15 @@ module Judgelint
       @rules.each do |rule|
         %i[pass fail].each do |expected|
           dir = File.join(rule.examples_dir, expected.to_s)
-          paths = Glob.expand([File.join(dir, "**", "*")])
+          # A directory rule's examples are the directories under pass/ and fail/.
+          paths = rule.directory? ? Dir.glob(File.join(dir, "*")).select { |path| File.directory?(path) }.sort
+                                  : Glob.expand([File.join(dir, "**", "*")])
           missing << "#{dir}/" if paths.empty?
           paths.each do |path|
-            source = Source.new(path, shown_as: path.delete_prefix("#{dir}/"))
+            shown = path.delete_prefix("#{dir}/")
+            context = rule.context_files
+            source = rule.directory? ? Source.directory(path, shown_as: shown, context: context)
+                                     : Source.new(path, shown_as: shown, context: context)
             jobs << plan_file(source, [rule], :all, expected: expected)
           end
         end
@@ -117,6 +135,10 @@ module Judgelint
       job
     end
 
+    def by_context(rules)
+      rules.group_by(&:context).map { |globs, group| yield(Glob.expand(globs), group) }
+    end
+
     def touched?(lines, first, last)
       lines == :all || (lines || []).any? { |line| line.between?(first, last) }
     end
@@ -125,18 +147,17 @@ module Judgelint
     # the provider's limits. A file whose state and widest question are
     # already over the limit is skipped: it's reported, never sent.
     def pack(job)
-      state = job.source.state
       pending = []
       job.questions.each_value do |questions|
         questions.each do |question|
-          cached = @cache.fetch(cache_key(question, state))
+          cached = @cache.fetch(cache_key(question, job))
           cached.nil? ? pending << question : job.answers[question.key] = cached
         end
       end
       return if pending.empty?
 
-      base = @client.tokens(state, [])
-      sizes = pending.map { |question| @client.tokens(state, [question]) - base }
+      base = @client.tokens(job.state, [])
+      sizes = pending.map { |question| @client.question_tokens(question) }
       if base + sizes.max >= @config.max_state_tokens
         job.skipped = true
         return
@@ -159,13 +180,13 @@ module Judgelint
     # With repeat above 1, each request is sent that many times and the answers
     # averaged, which smooths a model that doesn't answer the same way twice.
     def ask(job)
-      state = job.source.state
+      state = job.state.dup # Spinel can't yet pass the Job's shared String along
       job.requests.each do |request|
         samples = Array.new(@config.repeat) { @client.judge(state, request.questions) }
         request.questions.each do |question|
           values = samples.map { |answers| answers[question.key] }.compact
           probability = values.empty? ? nil : values.sum / values.size
-          @cache.store(cache_key(question, state), probability) unless probability.nil?
+          @cache.store(cache_key(question, job), probability) unless probability.nil?
           job.answers[question.key] = probability
         end
       end
@@ -185,11 +206,12 @@ module Judgelint
       return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if answered.empty?
 
       worst = answered.max_by { |question| rule.violation_probability(job.answers[question.key]) }
-      Verdict.classify(rule, path, job.answers[worst.key], warn_at: @config.warn_at, lines: [worst.first, worst.last])
+      lines = rule.directory? ? nil : [worst.first, worst.last]
+      Verdict.classify(rule, path, job.answers[worst.key], warn_at: @config.warn_at, lines: lines)
     end
 
-    def cache_key(question, state)
-      Cache.key(question.digest, state, @config.model_label)
+    def cache_key(question, job)
+      Cache.key(question.digest, job.state_digest, @config.model_label)
     end
   end
 end

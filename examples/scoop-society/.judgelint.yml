@@ -1,0 +1,3 @@
+# judgelint on praxis's demo app. See README.md.
+provider: typesafe
+model: jev-latest

@@ -2,6 +2,7 @@
 
 require "rake/testtask"
 require "rubygems/package"
+require "json"
 
 Rake::TestTask.new(:test) do |t|
   t.libs << "test" << "lib"
@@ -76,6 +77,19 @@ task "gem:native" => :spinel do
   mv Gem::Package.build(spec), "pkg/"
 ensure
   rm_rf "libexec"
+end
+
+desc "Re-ask the model about examples/scoop-society and check it against praxis's verdicts"
+task :example do
+  Dir.chdir("examples/scoop-society") do
+    rm_f ".judgelint/cache.json"
+    out = `ruby -I ../../lib ../../exe/judgelint --format json`
+    found = JSON.parse(out)["results"].select { |result| result["status"] == "violation" }
+                                     .map { |result| [result["path"], result["rule"]] }.sort
+    expected = JSON.parse(File.read("expected.json"))["violations"].map { |v| [v["path"], v["rule"]] }.sort
+    abort "Missed: #{(expected - found).inspect}\nExtra: #{(found - expected).inspect}" unless found == expected
+    puts "All #{expected.size} expected violations found, and nothing else."
+  end
 end
 
 task default: :test

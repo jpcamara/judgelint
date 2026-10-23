@@ -272,6 +272,36 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_directory_rules_with_context
+    in_smelly_project do
+      write(".judgelint/rules/cohesive.md", <<~MARKDOWN)
+        ---
+        question: Do these files fail to hang together?
+        scope: directory
+        paths: ["app/features/*"]
+        context: ["app/types.rb"]
+        ---
+        One capability per feature.
+      MARKDOWN
+      write("app/features/a/index.rb", "SMELL\n")
+      write("app/features/b/index.rb", "fine\n")
+      write("app/types.rb", "T\n")
+      runners.each do |name, run|
+        status, out, = run.call(["app/features"])
+
+        assert_equal 1, status, name
+        assert_match(%r{^app/features/a\n  x error\s+cohesive\s+0\.90  One capability per feature\.$}, out, name)
+        assert_match(/^4 files, 2 violations$/, out, "#{name}: two files for smell, two directories for cohesive")
+
+        _status, out, = run.call(["rules"])
+        assert_match(/^cohesive\s+error\s+2 dirs/, out, name)
+      end
+      directory_states = @server.requests.map { |request| request[:payload]["state"] }.grep(/\ADirectory: /)
+      refute_empty directory_states
+      assert(directory_states.all? { |state| state.include?("Path: app/types.rb") })
+    end
+  end
+
   def test_providers_lists_the_presets
     in_project do
       runners.each do |name, run|

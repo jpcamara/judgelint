@@ -1,0 +1,71 @@
+{
+  "source": "praxis-cli demo verdicts (inception/mercury-2.5), github.com/zarpay/praxis-cli @ 02a4bbd",
+  "violations": [
+    {
+      "path": "src/services/apply-refund.ts",
+      "rule": "failures-are-values",
+      "praxis": "Domain failures are raised via throw instead of returning { ok: false, error }."
+    },
+    {
+      "path": "src/services/apply-refund.ts",
+      "rule": "failure-docs",
+      "praxis": "Missing doc comment stating the service purpose and enumerating domain failure modes."
+    },
+    {
+      "path": "src/services/apply-refund.ts",
+      "rule": "consumer-errors",
+      "praxis": "Error messages do not name what was wrong and what would be accepted instead."
+    },
+    {
+      "path": "src/services/notify-parlor.ts",
+      "rule": "no-direct-io",
+      "praxis": "Uses console.log and fetch."
+    },
+    {
+      "path": "src/services/parlor.ts",
+      "rule": "verb-first-name",
+      "praxis": "parlor.ts is a noun, not verb-first kebab-case."
+    },
+    {
+      "path": "src/services/parlor.ts",
+      "rule": "one-entry-point",
+      "praxis": "Exports run, formatParlor, and isEligible."
+    },
+    {
+      "path": "src/services/rank-parlors.ts",
+      "rule": "consumer-errors",
+      "praxis": "Returns error 'invalid input'."
+    },
+    {
+      "path": "src/services/update-parlor-hours.ts",
+      "rule": "consumer-errors",
+      "praxis": "'opensAt failed the regex' and 'no' omit what would be accepted."
+    },
+    {
+      "path": "src/services/update-parlor-hours.ts",
+      "rule": "failure-docs",
+      "praxis": "No doc comment."
+    },
+    {
+      "path": "src/services/update-parlor-hours.ts",
+      "rule": "validate-first",
+      "praxis": null,
+      "note": "Builds summary and label (lines 11-13) before validating; praxis's reviewer didn't flag it."
+    },
+    {
+      "path": "src/features/flavor-of-day",
+      "rule": "feature-entry-point",
+      "praxis": "index.ts is missing."
+    },
+    {
+      "path": "src/features/flavor-of-day",
+      "rule": "no-orphaned-files",
+      "praxis": "old-rotation.ts is unreachable."
+    },
+    {
+      "path": "src/features/flavor-of-day",
+      "rule": "one-capability",
+      "praxis": "old-rotation.ts serves a distinct legacy purpose."
+    }
+  ]
+}

@@ -20,13 +20,18 @@ module Judgelint
   #
   # +scope+ "window" asks about each range of lines, so a finding says where
   # it is; "file" asks once about the whole file, for conventions no range can
-  # show on its own. A fail_when: no rule is about the whole file by default.
+  # show on its own; "directory" asks once about each directory its paths
+  # match, with all of the directory's files, for conventions about how files
+  # relate. A fail_when: no rule is about the whole file by default.
+  #
+  # +context+ globs name files the model reads alongside, such as shared
+  # types, which are never judged themselves.
   class Rule
     FRONTMATTER = /\A---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\z)(.*)\z/m
-    KEYS = %w[id question yes_means no_means fail_when scope paths excludes severity threshold message].freeze
+    KEYS = %w[id question yes_means no_means fail_when scope paths excludes context severity threshold message].freeze
 
-    attr_reader :id, :question, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes, :severity,
-                :threshold, :message, :source
+    attr_reader :id, :question, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes, :context,
+                :severity, :threshold, :message, :source
 
     def self.load_dir(dir, default_threshold:)
       raise ConfigError, "No rules directory at #{dir} (run `judgelint init`)" unless File.directory?(dir)
@@ -59,10 +64,11 @@ module Judgelint
       @yes_means = text(data["yes_means"])
       @no_means = text(data["no_means"])
       @fail_when = one_of("fail_when", yes_or_no(data.fetch("fail_when", "yes")), %w[yes no])
-      @scope = one_of("scope", data.fetch("scope", @fail_when == "yes" ? "window" : "file"), %w[window file])
+      @scope = one_of("scope", data.fetch("scope", @fail_when == "yes" ? "window" : "file"), %w[window file directory])
       @severity = one_of("severity", data.fetch("severity", "error"), %w[error warning])
       @paths = list(data["paths"], ["**/*"])
       @excludes = list(data["excludes"], [])
+      @context = list(data["context"], [])
       @threshold = parse_threshold(data.key?("threshold") ? data["threshold"] : default_threshold)
       @message = (data["message"] || first_paragraph(body) || @question).to_s.strip
     end
@@ -77,6 +83,19 @@ module Judgelint
 
     def window?
       scope == "window"
+    end
+
+    def directory?
+      scope == "directory"
+    end
+
+    def context_files
+      Glob.expand(context)
+    end
+
+    # The directories a directory rule governs.
+    def directories
+      paths.flat_map { |pattern| Dir.glob(pattern) }.select { |path| File.directory?(path) && applies_to?(path) }.uniq.sort
     end
 
     # The ranges to ask about: windows of +size+ lines, or the whole file.

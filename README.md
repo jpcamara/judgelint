@@ -17,7 +17,9 @@ That means no free-text findings and no line numbers, but answers are cheap,
 fast, and calibrated enough to threshold.
 
 judgelint is Ruby with no runtime dependencies, and compiles to a native
-binary with [Spinel](https://github.com/matz/spinel).
+binary with [Spinel](https://github.com/matz/spinel). It isn't tied to Ruby
+code: [examples/scoop-society](examples/scoop-society) runs it on praxis's own
+TypeScript demo and finds the same violations praxis's chat-model reviewer does.
 
 ## Install
 
@@ -77,7 +79,8 @@ Swallowed exceptions hide bugs until they cost us data.
 | `question` | required | The yes/no question. Keep it narrow: one convention, answerable from the file alone. |
 | `yes_means`, `no_means` | none | What each answer means. Sent to the model as criteria. |
 | `fail_when` | `yes` | Which answer is a violation. Use `no` for questions like "Does this service validate its input first?" |
-| `scope` | `window` (`file` when `fail_when: no`) | `window` asks about each range of lines; `file` asks once about the whole file. |
+| `scope` | `window` (`file` when `fail_when: no`) | `window` asks about each range of lines; `file` asks once about the whole file; `directory` asks once about each directory `paths` matches, with all its files. |
+| `context` | none | Globs for files the model reads alongside, such as shared types. They're never judged. |
 | `paths`, `excludes` | `**/*`, none | Globs for the files the rule governs. `**/` matches zero or more directories. |
 | `severity` | `error` | `error` fails the run; `warning` is reported only. |
 | `threshold` | config's | Violation probability at or above which the file is a violation. |
@@ -91,6 +94,24 @@ apply." That last sentence keeps the model from flagging code a rule doesn't
 cover. All of a file's questions share one request (or a few, packed to the
 provider's limits), so a file's verdicts never depend on which files ran
 beside it, and a rule's verdict is its worst window.
+
+Some conventions are about how files relate: one entry point per feature, no
+orphaned files. A `scope: directory` rule judges each directory its `paths`
+match as one unit, with every file in it (and its `context`):
+
+```markdown
+---
+question: Is any file in this directory unreachable from index.ts through its imports?
+scope: directory
+paths: ["src/features/*"]
+context: ["src/domain/types.ts"]
+---
+Every file in a feature is reachable from index.ts.
+```
+
+A directory rule's examples are directories: `rules/<id>/pass/<name>/` and
+`rules/<id>/fail/<name>/`. With `--base`, a directory is checked when a change
+touched any file in it.
 
 The answer is the probability of yes, turned into a violation probability by
 `fail_when`: at or above `threshold` it's a violation, at or above `warn_at`
@@ -334,11 +355,25 @@ SPINEL=../spinel/bin/spinel rake gem:native    # this platform's gem, into pkg/
 The binary links OpenSSL statically and needs nothing beyond the system's C
 library. It reads certificates from `SSL_CERT_FILE`, or else the system bundle
 (`/etc/ssl/cert.pem`, `/etc/ssl/certs/ca-certificates.crt`, or
-`/etc/pki/tls/certs/ca-bundle.crt`). Through the gem it starts in about 45 ms,
-against about 110 ms in plain Ruby; run directly, a few milliseconds. The
-[Native gems](.github/workflows/native.yml) workflow builds and tests the four
-platform gems. There's no native Windows build: Spinel's Windows port is
-best-effort, and the Ruby gem already runs there.
+`/etc/pki/tls/certs/ca-bundle.crt`). The [Native gems](.github/workflows/native.yml)
+workflow builds and tests the four platform gems. There's no native Windows
+build: Spinel's Windows port is best-effort, and the Ruby gem already runs there.
+
+How much the binary saves, with the model taken out (an Apple M2; CRuby 3.4.5;
+the 300-file run asks a local stub server, so only judgelint's own work counts):
+
+| | Native binary | Through the platform gem | CRuby | CRuby + YJIT |
+|---|---|---|---|---|
+| `--version` | 3.7 ms | 46 ms | 108 ms | 134 ms |
+| Fully cached run of the example (20 units) | 9.9 ms | 51 ms | 121 ms | 165 ms |
+| 300 files x 400 lines, 300 requests, 1 thread | 264 ms | | 366 ms | 421 ms |
+| The same, 8 threads | 165 ms | | 327 ms | 386 ms |
+
+Most of CRuby's time on a small run is loading Ruby and the standard library.
+On a big run the per-request work is about even, and the binary pulls ahead on
+threads, which run in parallel there and take turns under CRuby's GVL. The
+platform gem's `judgelint` starts Ruby and hands off to the binary, which costs
+about 40 ms; run `libexec/judgelint` from the gem directly to skip it.
 
 Spinel's limits explain the odd choices: plain classes instead of `Data.define`
 (Spinel can't compile Data or Struct alongside `net/https` and `json`), a
