@@ -5,9 +5,8 @@ module Judgelint
   module Scaffold
     CONFIG = <<~YAML
       # judgelint settings. See https://github.com/jpcamara/judgelint#configuration
-      provider: typesafe      # typesafe (Jev), celeris, openrouter (Kev), or a RubyLLM provider
+      provider: typesafe      # typesafe (Jev), celeris, or openrouter (Kev)
       model: jev-latest
-      # backend: auto         # auto, ruby_llm, or system_one
       # threshold: 0.7        # violation probability that counts as a violation
       # warn_at: 0.4          # below threshold but at least this is reported as uncertain
       rules: .judgelint/rules

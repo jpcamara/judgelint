@@ -16,8 +16,10 @@ trade: narrow questions to a fast decision model instead of open-ended review.
 That means no free-text findings and no line numbers, but answers are cheap,
 fast, and calibrated enough to threshold.
 
-judgelint is written in Ruby. It uses RubyLLM's Judge API (RubyLLM 2.1+) and
-also compiles to a native binary with [Spinel](https://github.com/matz/spinel).
+judgelint is written in Ruby with no runtime dependencies, and compiles to a
+native binary with [Spinel](https://github.com/matz/spinel). It speaks the
+System One protocol directly: the same request RubyLLM 2.1's Judge API sends
+through its TypeSafe provider, without RubyLLM, which Spinel can't compile.
 
 ## Install
 
@@ -122,9 +124,8 @@ leaks the answer.
 `.judgelint.yml`:
 
 ```yaml
-provider: typesafe        # typesafe (Jev), celeris, openrouter (Kev), or any RubyLLM provider
+provider: typesafe        # typesafe (Jev), celeris, or openrouter (Kev)
 model: jev-latest
-backend: auto             # auto, ruby_llm, or system_one
 threshold: 0.7            # violation probability that counts as a violation
 warn_at: 0.4              # at least this, but below threshold, is reported as uncertain
 rules: .judgelint/rules
@@ -135,11 +136,10 @@ timeout: 30
 # api_base: https://api.typesafe.ai
 # api_key_env: TYPESAFE_API_KEY
 # provider_options: { x_celeris: { explain: true } }   # merged into the request body
-# require: [ruby_llm/llm_judge]                         # extra RubyLLM providers
 ```
 
-Command-line flags override the file: `--provider`, `--model`, `--backend`,
-`--threshold`, `--no-cache`, `--config`, `--format json`.
+Command-line flags override the file: `--provider`, `--model`, `--threshold`,
+`--no-cache`, `--config`, `--format json`.
 
 ### Providers
 
@@ -148,17 +148,7 @@ Command-line flags override the file: `--provider`, `--model`, `--backend`,
 | `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` | Default. ~200 ms per request. |
 | `celeris` | `celeris-1-decision` | `CELERIS_API_KEY` | Best calibrated in our benchmarks. Not deterministic between runs. |
 | `openrouter` | `jaredpalmer/kev-4b` | `OPENROUTER_API_KEY` | Kev 4B through OpenRouter's System One endpoint. |
-| anything else | required | set `api_key_env` | Passed to RubyLLM as the provider name. Needs the `ruby_llm` backend. |
-
-### Backends
-
-- `ruby_llm` calls `RubyLLM.judge`. It is the default on CRuby and the way to
-  reach any provider RubyLLM supports, including chat-model judges such as
-  [ruby_llm-llm_judge](https://github.com/jpcamara/ruby_llm-llm_judge) for
-  rules a decision model can't handle.
-- `system_one` posts the System One protocol directly over `Net::HTTP`. The
-  native binary always uses it, since Spinel can't load RubyLLM. Both send the
-  same request body.
+| anything else | required | set `api_key_env` | Any System One endpoint: set `api_base` too. |
 
 ### Cache
 
@@ -195,7 +185,7 @@ SPINEL=../spinel/bin/spinel rake test:spinel   # runs the CLI tests against it t
 
 The binary uses Spinel's `net/https`, which links the OpenSSL it was built
 against (Homebrew's `openssl@3` on macOS). It starts in a few milliseconds,
-against about 250 ms for the gem with RubyLLM loaded, so a fully cached run
+against about 110 ms for the gem on CRuby, so a fully cached run
 is effectively free.
 
 Writing for Spinel meant a few choices that look odd in CRuby:
@@ -205,8 +195,8 @@ Writing for Spinel meant a few choices that look odd in CRuby:
 - Options are parsed by hand. Spinel can't compile this program's use of OptionParser.
 - `Hash#fetch` with a Float default on a YAML-loaded Hash is avoided; Spinel
   miscompiles it.
-- No `method_missing`, `eval`, or runtime `define_method`. The RubyLLM backend
-  is loaded behind `RUBY_ENGINE != "spinel"`, which Spinel drops at compile time.
+- No `method_missing`, `eval`, or runtime `define_method`, and no gems: the
+  HTTP client is `net/https`, not RubyLLM or Faraday.
 
 ## Development
 

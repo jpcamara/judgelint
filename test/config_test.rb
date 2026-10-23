@@ -13,7 +13,6 @@ class ConfigTest < Minitest::Test
       assert_equal "jev-latest", config.model
       assert_equal "https://api.typesafe.ai", config.api_base
       assert_equal "TYPESAFE_API_KEY", config.api_key_env
-      assert_equal "ruby_llm", config.resolved_backend
       assert_in_delta 0.7, config.threshold
       assert_equal ".judgelint/cache.json", config.cache_path
     end
@@ -35,9 +34,6 @@ class ConfigTest < Minitest::Test
   def test_rejects_unknown_keys_and_bad_values
     in_project do
       write(".judgelint.yml", "modle: jev\n")
-      assert_raises(Judgelint::ConfigError) { Judgelint::ConfigLoader.load }
-
-      write(".judgelint.yml", "backend: chat\n")
       assert_raises(Judgelint::ConfigError) { Judgelint::ConfigLoader.load }
 
       write(".judgelint.yml", "threshold: 0.3\nwarn_at: 0.5\n")

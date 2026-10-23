@@ -12,8 +12,8 @@ Gem::Specification.new do |spec|
   spec.description = <<~TEXT
     judgelint checks files against conventions that only a reader can judge. Each
     rule is a yes/no question answered by a fast decision model such as TypeSafe's
-    Jev, through RubyLLM's Judge API or the System One protocol directly. It also
-    compiles to a native binary with Spinel.
+    Jev over the System One protocol. It also compiles to a native binary with
+    Spinel.
   TEXT
   spec.homepage = "https://github.com/jpcamara/judgelint"
   spec.license = "MIT"
@@ -26,6 +26,4 @@ Gem::Specification.new do |spec|
   spec.files = Dir["lib/**/*.rb", "exe/*", "spinel/*.rb", "README.md", "CHANGELOG.md", "LICENSE"]
   spec.bindir = "exe"
   spec.executables = ["judgelint"]
-
-  spec.add_dependency "ruby_llm", ">= 2.1", "< 3"
 end

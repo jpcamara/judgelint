@@ -2,22 +2,16 @@
 
 module Judgelint
   # Settings from .judgelint.yml, with command-line overrides on top.
-  #
-  # +backend+ picks how questions reach the model: "ruby_llm" goes through
-  # RubyLLM.judge (CRuby only), "system_one" posts the System One protocol
-  # directly. "auto" uses RubyLLM on CRuby and System One in the native binary.
   # Not Data.define: Spinel can't compile a Data or Struct in a program that also uses net/https and json.
   class Config
-    attr_reader :backend, :provider, :model, :api_base, :api_key_env, :provider_options, :requires, :rules_dir, :threshold, :warn_at, :max_bytes, :batch_size, :timeout, :cache_path
+    attr_reader :provider, :model, :api_base, :api_key_env, :provider_options, :rules_dir, :threshold, :warn_at, :max_bytes, :batch_size, :timeout, :cache_path
 
-    def initialize(backend:, provider:, model:, api_base:, api_key_env:, provider_options:, requires:, rules_dir:, threshold:, warn_at:, max_bytes:, batch_size:, timeout:, cache_path:)
-      @backend = backend
+    def initialize(provider:, model:, api_base:, api_key_env:, provider_options:, rules_dir:, threshold:, warn_at:, max_bytes:, batch_size:, timeout:, cache_path:)
       @provider = provider
       @model = model
       @api_base = api_base
       @api_key_env = api_key_env
       @provider_options = provider_options
-      @requires = requires
       @rules_dir = rules_dir
       @threshold = threshold
       @warn_at = warn_at
@@ -33,12 +27,6 @@ module Judgelint
 
     def api_key
       api_key_env.to_s.empty? ? nil : ENV.fetch(api_key_env, nil)
-    end
-
-    def resolved_backend
-      return backend unless backend == "auto"
-
-      RUBY_ENGINE == "spinel" ? "system_one" : "ruby_llm"
     end
   end
 
@@ -58,9 +46,8 @@ module Judgelint
 
   module ConfigLoader
     FILE = ".judgelint.yml"
-    BACKENDS = %w[auto ruby_llm system_one].freeze
     KEYS = %w[
-      backend provider model api_base api_key_env provider_options require
+      provider model api_base api_key_env provider_options
       rules threshold warn_at max_bytes batch_size timeout cache
     ].freeze
 
@@ -89,9 +76,6 @@ module Judgelint
     end
 
     def self.build(data)
-      backend = data.fetch("backend", "auto").to_s
-      raise ConfigError, "backend is one of #{BACKENDS.join(', ')}, not #{backend}" unless BACKENDS.include?(backend)
-
       provider = data.fetch("provider", "typesafe").to_s
       preset = PROVIDERS.fetch(provider, {})
       threshold = number(data, "threshold", 0.7)
@@ -102,13 +86,11 @@ module Judgelint
       raise ConfigError, "provider_options must be a mapping" unless options.is_a?(Hash)
 
       Config.new(
-        backend: backend,
         provider: provider,
         model: setting(data, preset, "model"),
         api_base: setting(data, preset, "api_base"),
         api_key_env: setting(data, preset, "api_key_env"),
         provider_options: options,
-        requires: RuleLoader.list(data["require"], []),
         rules_dir: data.fetch("rules", ".judgelint/rules").to_s,
         threshold: threshold,
         warn_at: warn_at,

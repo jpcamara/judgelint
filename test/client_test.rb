@@ -2,7 +2,7 @@
 
 require "test_helper"
 
-class BackendsTest < Minitest::Test
+class ClientTest < Minitest::Test
   include ProjectHelpers
 
   def setup
@@ -15,9 +15,9 @@ class BackendsTest < Minitest::Test
     ENV.delete("JUDGELINT_TEST_KEY")
   end
 
-  def test_system_one_sends_the_protocol_body
+  def test_sends_the_system_one_body
     rules = [rule("smell", yes_means: "It smells.", no_means: "It doesn't."), rule("plain")]
-    answers = Judgelint::Backends::SystemOne.new(stub_config).judge("SMELL", rules)
+    answers = Judgelint::Client.new(stub_config).judge("SMELL", rules)
 
     assert_equal({ "smell" => 0.9, "plain" => 0.9 }, answers)
     request = @server.requests.first
@@ -36,29 +36,17 @@ class BackendsTest < Minitest::Test
     )
   end
 
-  def test_ruby_llm_sends_the_same_body
-    rules = [rule("smell", yes_means: "It smells.", no_means: "It doesn't."), rule("plain")]
-    answers = Judgelint::Backends::RubyLLM.new(stub_config(backend: "ruby_llm")).judge("fine", rules)
-
-    assert_equal({ "smell" => 0.1, "plain" => 0.1 }, answers)
-    request = @server.requests.first
-    assert_equal "/v1/systemone", request[:path]
-    assert_equal "Bearer secret", request[:authorization]
-    direct = Judgelint::Backends::SystemOne.payload("jev-latest", "fine", rules, {})
-    assert_equal direct, request[:payload]
-  end
-
   def test_provider_options_join_the_body
     config = stub_config(provider_options: { "x_celeris" => { "explain" => true } })
-    Judgelint::Backends::SystemOne.new(config).judge("x", [rule])
+    Judgelint::Client.new(config).judge("x", [rule])
 
     assert_equal({ "explain" => true }, @server.requests.first[:payload]["x_celeris"])
   end
 
   def test_errors_name_the_status_and_detail
     server = StubSystemOne.new(status: 401, body: '{"detail":"bad key"}')
-    error = assert_raises(Judgelint::BackendError) do
-      Judgelint::Backends::SystemOne.new(stub_config(api_base: server.base)).judge("x", [rule])
+    error = assert_raises(Judgelint::ApiError) do
+      Judgelint::Client.new(stub_config(api_base: server.base)).judge("x", [rule])
     end
     assert_match(/401: bad key/, error.message)
   ensure
@@ -67,17 +55,29 @@ class BackendsTest < Minitest::Test
 
   def test_missing_answers_are_errors
     server = StubSystemOne.new(body: '{"answers":{}}')
-    error = assert_raises(Judgelint::BackendError) do
-      Judgelint::Backends::SystemOne.new(stub_config(api_base: server.base)).judge("x", [rule])
+    error = assert_raises(Judgelint::ApiError) do
+      Judgelint::Client.new(stub_config(api_base: server.base)).judge("x", [rule])
     end
     assert_match(/No yes\/no answer for smell/, error.message)
   ensure
     server&.stop
   end
 
-  def test_unreachable_endpoint_is_a_backend_error
+  def test_unreachable_endpoint_is_an_api_error
     config = stub_config(api_base: "http://127.0.0.1:1")
-    assert_raises(Judgelint::BackendError) { Judgelint::Backends::SystemOne.new(config).judge("x", [rule]) }
+    assert_raises(Judgelint::ApiError) { Judgelint::Client.new(config).judge("x", [rule]) }
+  end
+
+  def test_a_missing_api_key_fails_before_any_request
+    error = assert_raises(Judgelint::ConfigError) do
+      Judgelint::Client.new(stub_config(api_key_env: "JUDGELINT_UNSET_KEY"))
+    end
+    assert_match(/Set JUDGELINT_UNSET_KEY/, error.message)
+  end
+
+  def test_an_unknown_provider_needs_an_api_base
+    error = assert_raises(Judgelint::ConfigError) { Judgelint::Client.new(config(provider: "acme", model: "m")) }
+    assert_match(/Set api_base for provider acme/, error.message)
   end
 
   private

@@ -23,9 +23,8 @@ module Judgelint
       Options:
         -c, --config PATH    Config file (default .judgelint.yml)
         -f, --format FORMAT  text or json
-            --provider NAME  typesafe, celeris, openrouter, or a RubyLLM provider
+            --provider NAME  typesafe, celeris, or openrouter
             --model ID       Decision model id
-            --backend NAME   auto, ruby_llm, or system_one
             --threshold N    Violation probability that counts as a violation (default 0.7)
             --no-cache       Ask the model even when an answer is cached
         -v, --version        Print the version
@@ -67,7 +66,7 @@ module Judgelint
     # Spinel can't compile OptionParser, so the few options are parsed here.
     VALUE_OPTIONS = {
       "-c" => "config", "--config" => "config", "-f" => "format", "--format" => "format",
-      "--provider" => "provider", "--model" => "model", "--backend" => "backend", "--threshold" => "threshold"
+      "--provider" => "provider", "--model" => "model", "--threshold" => "threshold"
     }.freeze
     FORMATS = %w[text json].freeze
 
@@ -134,8 +133,8 @@ module Judgelint
       end
 
       cache = Cache.new(config.cache_path)
-      examples = FixtureRunner.new(Runner.new(config: config, rules: rules, backend: Backends.build(config),
-                                              cache: cache)).run(rules)
+      runner = Runner.new(config: config, rules: rules, client: Client.new(config), cache: cache)
+      examples = FixtureRunner.new(runner).run(rules)
       cache.save
       if examples.empty?
         @err.puts "No examples found. Add files under <rules>/<id>/pass and <rules>/<id>/fail."
@@ -167,7 +166,7 @@ module Judgelint
     end
 
     def runner(config, rules)
-      Runner.new(config: config, rules: rules, backend: Backends.build(config), cache: Cache.new(config.cache_path))
+      Runner.new(config: config, rules: rules, client: Client.new(config), cache: Cache.new(config.cache_path))
     end
   end
 end

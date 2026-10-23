@@ -5,10 +5,10 @@ module Judgelint
   # request carrying every applicable rule as its own question, so a file's
   # verdicts never depend on which other files ran alongside it.
   class Runner
-    def initialize(config:, rules:, backend:, cache:)
+    def initialize(config:, rules:, client:, cache:)
       @config = config
       @rules = rules
-      @backend = backend
+      @client = client
       @cache = cache
     end
 
@@ -55,7 +55,7 @@ module Judgelint
       end
 
       missing.each_slice(@config.batch_size) do |batch|
-        answers = @backend.judge(state, batch)
+        answers = @client.judge(state, batch)
         batch.each do |rule|
           probability = answers.fetch(rule.question_key)
           @cache.store(cache_key(rule, state), probability)

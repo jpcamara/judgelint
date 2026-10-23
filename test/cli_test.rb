@@ -88,7 +88,7 @@ class CLITest < Minitest::Test
     end
   end
 
-  def test_backend_errors_exit_two
+  def test_api_errors_exit_two
     in_smelly_project do
       runners.each do |name, run|
         status, _out, err = run.call(["--model", "x", "app/bad.rb"], api_base: "http://127.0.0.1:1")
@@ -156,8 +156,7 @@ class CLITest < Minitest::Test
     runners
   end
 
-  # The in-process run goes through RubyLLM; the others use system_one, so
-  # both backends see the same cases. Always called inside a temporary project.
+  # Always called inside a temporary project.
   def env(api_base)
     write(".judgelint.yml", <<~YAML)
       api_base: #{api_base}
@@ -171,14 +170,14 @@ class CLITest < Minitest::Test
     ENV.update(env(api_base))
     out = StringIO.new
     err = StringIO.new
-    status = Judgelint::CLI.new(args + ["--backend", "ruby_llm"], out: out, err: err).run
+    status = Judgelint::CLI.new(args, out: out, err: err).run
     [status, out.string, err.string]
   ensure
     ENV.delete("JUDGELINT_TEST_KEY")
   end
 
   def run_command(command, args, api_base: @server.base)
-    out, err, status = Open3.capture3(env(api_base), *command, *args, "--backend", "system_one")
+    out, err, status = Open3.capture3(env(api_base), *command, *args)
     [status.exitstatus, out, err]
   end
 end

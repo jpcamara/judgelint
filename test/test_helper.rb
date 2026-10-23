@@ -59,7 +59,7 @@ class StubSystemOne
 end
 
 # Answers from a table instead of a model, and counts calls.
-class FakeBackend
+class FakeClient
   attr_reader :calls
 
   def initialize(&answer)
