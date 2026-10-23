@@ -31,7 +31,12 @@ module Judgelint
 
       probabilities = answer(shown_as, content, rules)
       rules.map do |rule|
-        Verdict.classify(rule, path, probabilities.fetch(rule.question_key), warn_at: @config.warn_at)
+        probability = probabilities[rule.question_key]
+        if probability.nil?
+          Verdict.new(rule: rule, path: path, probability: nil, status: :refused)
+        else
+          Verdict.classify(rule, path, probability, warn_at: @config.warn_at)
+        end
       end
     end
 
@@ -57,8 +62,8 @@ module Judgelint
       missing.each_slice(@config.batch_size) do |batch|
         answers = @client.judge(state, batch)
         batch.each do |rule|
-          probability = answers.fetch(rule.question_key)
-          @cache.store(cache_key(rule, state), probability)
+          probability = answers[rule.question_key]
+          @cache.store(cache_key(rule, state), probability) unless probability.nil?
           probabilities[rule.question_key] = probability
         end
       end

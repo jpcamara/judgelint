@@ -17,7 +17,10 @@ module Judgelint
         @verdict = verdict
       end
 
+      # A refused or skipped example is a miss either way: the rule didn't work on it.
       def correct?
+        return false if %i[refused skipped].include?(verdict.status)
+
         (verdict.status == :violation) == (expected == :fail)
       end
     end

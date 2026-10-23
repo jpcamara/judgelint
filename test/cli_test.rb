@@ -39,7 +39,8 @@ class CLITest < Minitest::Test
         _status, out, = run.call(["check", "--format", "json", "app/bad.rb"])
         data = JSON.parse(out)
 
-        assert_equal({ "violation" => 1, "uncertain" => 0, "pass" => 0, "skipped" => 0 }, data["summary"], name)
+        assert_equal({ "violation" => 1, "uncertain" => 0, "pass" => 0, "skipped" => 0, "refused" => 0 },
+                     data["summary"], name)
         assert_equal "smell", data["results"].first["rule"], name
         assert_in_delta 0.9, data["results"].first["probability"], 0.001, name
       end
@@ -94,6 +95,77 @@ class CLITest < Minitest::Test
         status, _out, err = run.call(["--model", "x", "app/bad.rb"], api_base: "http://127.0.0.1:1")
         assert_equal 2, status, name
         assert_match(/judgelint: /, err, name)
+      end
+    end
+  end
+
+  def test_openai_decisions_protocol
+    in_smelly_project do
+      runners.each do |name, run|
+        status, out, = run.call(["app/bad.rb"], settings: "provider: openai")
+
+        assert_equal 1, status, name
+        assert_match(/1 violations/, out, name)
+      end
+      assert(@server.requests.all? { |request| request[:path] == "/v1/decisions" })
+    end
+  end
+
+  def test_cloudflare_envelope_and_account_in_the_url
+    wrapped = { "result" => { "answers" => { "smell" => { "type" => "noul", "noul" => 0.95 } } }, "success" => true }
+    server = StubSystemOne.new(body: wrapped)
+    in_smelly_project do
+      runners.each do |name, run|
+        ENV["JUDGELINT_TEST_ACCOUNT"] = "acct"
+        settings = "provider: cloudflare\napi_base: #{server.base}/accounts/${JUDGELINT_TEST_ACCOUNT}/ai/run"
+        status, out, = run.call(["app/good.rb"], settings: settings)
+
+        assert_equal 1, status, name
+        assert_match(/0\.95/, out, name)
+      end
+    end
+    assert(server.requests.all? { |request| request[:path] == "/accounts/acct/ai/run/@cf/cloudflare/clef" })
+  ensure
+    ENV.delete("JUDGELINT_TEST_ACCOUNT")
+    server&.stop
+  end
+
+  def test_basic_auth_and_extra_headers
+    in_smelly_project do
+      runners.each do |name, run|
+        status, = run.call(["app/good.rb"], settings: "auth: basic\nheaders: { X-Judgelint: yes-please }")
+        assert_equal 0, status, name
+      end
+    end
+    request = @server.requests.last
+    assert_equal "Basic #{['token:secret'].pack('m0')}", request[:authorization]
+    assert_equal "yes-please", request[:headers]["x-judgelint"]
+  end
+
+  def test_retries_then_succeeds
+    ok = { "answers" => { "smell" => { "type" => "noul", "noul" => 0.1 } } }
+    in_smelly_project do
+      runners.each do |name, run|
+        server = StubSystemOne.new(responses: [[429, { "detail" => "slow" }, { "Retry-After" => "0" }], [200, ok]])
+        status, out, = run.call(["app/good.rb"], api_base: server.base)
+
+        assert_equal 0, status, name
+        assert_equal "1 file, 0 violations\n", out, name
+        assert_equal 2, server.requests.size, name
+      ensure
+        server&.stop
+      end
+    end
+  end
+
+  def test_providers_lists_the_presets
+    in_project do
+      runners.each do |name, run|
+        status, out, = run.call(["providers"])
+
+        assert_equal 0, status, name
+        assert_match(/^cloudflare\s+clef\s+CLOUDFLARE_API_TOKEN/, out, name)
+        assert_match(/^openai\s+gpt-6-luna/, out, name)
       end
     end
   end
@@ -156,18 +228,19 @@ class CLITest < Minitest::Test
     runners
   end
 
-  # Always called inside a temporary project.
-  def env(api_base)
-    write(".judgelint.yml", <<~YAML)
-      api_base: #{api_base}
-      api_key_env: JUDGELINT_TEST_KEY
-      cache: false
-    YAML
+  # Always called inside a temporary project. +settings+ is more YAML, and
+  # its keys win over the defaults here.
+  def env(api_base, settings)
+    defaults = { "api_base" => api_base, "api_key_env" => "JUDGELINT_TEST_KEY", "cache" => "false" }
+    lines = settings.lines.map(&:chomp).reject(&:empty?)
+    given = lines.map { |line| line.split(":", 2).first }
+    defaults.each { |key, value| lines << "#{key}: #{value}" unless given.include?(key) }
+    write(".judgelint.yml", "#{lines.join("\n")}\n")
     { "JUDGELINT_TEST_KEY" => "secret" }
   end
 
-  def run_in_process(args, api_base: @server.base)
-    ENV.update(env(api_base))
+  def run_in_process(args, api_base: @server.base, settings: "")
+    ENV.update(env(api_base, settings))
     out = StringIO.new
     err = StringIO.new
     status = Judgelint::CLI.new(args, out: out, err: err).run
@@ -176,8 +249,8 @@ class CLITest < Minitest::Test
     ENV.delete("JUDGELINT_TEST_KEY")
   end
 
-  def run_command(command, args, api_base: @server.base)
-    out, err, status = Open3.capture3(env(api_base), *command, *args)
+  def run_command(command, args, api_base: @server.base, settings: "")
+    out, err, status = Open3.capture3(env(api_base, settings), *command, *args)
     [status.exitstatus, out, err]
   end
 end

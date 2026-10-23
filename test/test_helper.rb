@@ -5,15 +5,16 @@ require "socket"
 require "tmpdir"
 require "judgelint"
 
-# A System One endpoint on localhost. Every question answers yes with
-# probability 0.9 when the state contains "SMELL", and 0.1 otherwise.
+# A decision-model endpoint on localhost that answers both protocols. Every
+# question answers yes with probability 0.9 when the state contains "SMELL",
+# and 0.1 otherwise. Pass responses (each [status, body] or [status, body,
+# headers]) to answer requests in order instead; the last one repeats.
 class StubSystemOne
   attr_reader :requests
 
-  def initialize(status: 200, body: nil)
+  def initialize(status: 200, body: nil, responses: nil)
     @server = TCPServer.new("127.0.0.1", 0)
-    @status = status
-    @body = body
+    @responses = responses || (body ? [[status, body]] : nil)
     @requests = []
     @thread = Thread.new { loop { serve(@server.accept) } }
   end
@@ -37,24 +38,33 @@ class StubSystemOne
       headers[name.downcase] = value.strip
     end
     payload = JSON.parse(client.read(headers.fetch("content-length").to_i))
-    @requests << { path: request_line.split[1], authorization: headers["authorization"], payload: payload }
+    @requests << { path: request_line.split[1], authorization: headers["authorization"], headers: headers,
+                   payload: payload }
     respond(client, payload)
   ensure
     client.close
   end
 
   def respond(client, payload)
-    body = @body || JSON.generate(answers_for(payload))
-    reason = @status == 200 ? "OK" : "Error"
-    client.write "HTTP/1.1 #{@status} #{reason}\r\nContent-Type: application/json\r\n" \
+    status, body, extra = @responses ? @responses[[@requests.size - 1, @responses.size - 1].min] : [200, nil]
+    body ||= JSON.generate(answers_for(payload))
+    body = JSON.generate(body) unless body.is_a?(String)
+    head = (extra || {}).map { |name, value| "#{name}: #{value}\r\n" }.join
+    client.write "HTTP/1.1 #{status} Stub\r\nContent-Type: application/json\r\n#{head}" \
                  "Content-Length: #{body.bytesize}\r\nConnection: close\r\n\r\n#{body}"
   end
 
   def answers_for(payload)
-    yes = payload["state"].to_s.include?("SMELL") ? 0.9 : 0.1
+    state = payload["state"] || payload["input"]
+    yes = state.to_s.include?("SMELL") ? 0.9 : 0.1
+    usage = { "input_tokens" => 10, "output_tokens" => 0 }
+    if payload.key?("input")
+      answers = payload["questions"].map { |q| { "type" => "predicate", "name" => q["name"], "probability" => yes } }
+      return { "model" => payload["model"], "answers" => answers, "usage" => usage }
+    end
+
     answers = payload["questions"].keys.to_h { |key| [key, { "type" => "noul", "noul" => yes }] }
-    { "model" => "#{payload['model']}-stub", "usage" => { "input_tokens" => 10, "output_tokens" => 1 },
-      "answers" => answers }
+    { "model" => "#{payload['model']}-stub", "usage" => usage, "answers" => answers }
   end
 end
 

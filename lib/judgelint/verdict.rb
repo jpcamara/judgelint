@@ -4,8 +4,9 @@ module Judgelint
   # One rule's outcome for one file.
   #
   # +status+ is :violation (at or above the rule's threshold), :uncertain
-  # (between warn_at and the threshold), :pass, or :skipped (the file is too
-  # large to judge; it is reported, never silently passed).
+  # (between warn_at and the threshold), :pass, :skipped (the file is too
+  # large to judge), or :refused (the model declined the question). Skipped
+  # and refused files are reported, never silently passed.
   # Not Data.define: Spinel can't compile a Data or Struct in a program that also uses net/https and json.
   class Verdict
     attr_reader :rule, :path, :probability, :status

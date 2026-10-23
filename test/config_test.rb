@@ -31,6 +31,22 @@ class ConfigTest < Minitest::Test
     end
   end
 
+  def test_switching_provider_drops_the_files_provider_settings
+    in_project do
+      write(".judgelint.yml", "provider: typesafe\nmodel: jev-preview\nthreshold: 0.6\n")
+
+      switched = Judgelint::ConfigLoader.load(overrides: { "provider" => "openai" })
+      assert_equal "gpt-6-luna", switched.model
+      assert_in_delta 0.6, switched.threshold
+
+      same = Judgelint::ConfigLoader.load(overrides: { "provider" => "typesafe" })
+      assert_equal "jev-preview", same.model
+
+      chosen = Judgelint::ConfigLoader.load(overrides: { "provider" => "openai", "model" => "gpt-6-luna-mini" })
+      assert_equal "gpt-6-luna-mini", chosen.model
+    end
+  end
+
   def test_rejects_unknown_keys_and_bad_values
     in_project do
       write(".judgelint.yml", "modle: jev\n")
@@ -41,8 +57,19 @@ class ConfigTest < Minitest::Test
     end
   end
 
-  def test_unknown_provider_needs_a_model
-    error = assert_raises(Judgelint::ConfigError) { config(provider: "acme") }
-    assert_match(/model is required/, error.message)
+  def test_presets_fill_protocol_path_auth_and_batch_size
+    openai = config(provider: "openai")
+    assert_equal ["decisions", "/v1/decisions", "bearer"], [openai.protocol, openai.path, openai.auth]
+
+    cloudflare = config(provider: "cloudflare")
+    assert_equal "/@cf/cloudflare/{model}", cloudflare.path
+    assert_equal 64, cloudflare.batch_size
+
+    databricks = config(provider: "databricks", batch_size: 8)
+    assert_equal ["system_one", "basic", 8], [databricks.protocol, databricks.auth, databricks.batch_size]
+  end
+
+  def test_variables_are_left_for_the_client_to_expand
+    assert_includes config(provider: "cloudflare").api_base, "${CLOUDFLARE_ACCOUNT_ID}"
   end
 end

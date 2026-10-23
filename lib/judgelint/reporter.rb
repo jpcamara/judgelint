@@ -3,7 +3,7 @@
 module Judgelint
   # Prints results. Data goes to stdout; anything else goes to stderr.
   class Reporter
-    MARKS = { violation: "x", uncertain: "?", skipped: "-" }.freeze
+    MARKS = { violation: "x", uncertain: "?", skipped: "-", refused: "-" }.freeze
 
     def initialize(out, format:)
       @out = out
@@ -58,6 +58,7 @@ module Judgelint
       parts << "#{counts.fetch(:violation, 0)} violations"
       parts << "#{counts[:uncertain]} uncertain" if counts[:uncertain]
       parts << "#{counts[:skipped]} skipped (too large)" if counts[:skipped]
+      parts << "#{counts[:refused]} refused by the model" if counts[:refused]
       parts.join(", ")
     end
 
@@ -67,7 +68,7 @@ module Judgelint
         "version" => VERSION,
         "model" => config.model_label,
         "files" => file_count,
-        "summary" => %w[violation uncertain pass skipped].to_h { |status| [status, counts.fetch(status.to_sym, 0)] },
+        "summary" => %w[violation uncertain pass skipped refused].to_h { |status| [status, counts.fetch(status.to_sym, 0)] },
         "results" => verdicts.map(&:to_h)
       }
     end

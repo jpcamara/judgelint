@@ -4,7 +4,7 @@ module Judgelint
   # Command line entry point. Exit codes: 0 clean, 1 violations (or missed
   # examples for `test`), 2 usage or configuration error.
   class CLI
-    COMMANDS = %w[check test rules init].freeze
+    COMMANDS = %w[check test rules providers init].freeze
 
     HELP = <<~TEXT
       Usage: judgelint [command] [options] [paths...]
@@ -18,12 +18,13 @@ module Judgelint
         test [rule ids...] Judge each rule's examples (rules/<id>/pass, rules/<id>/fail)
                            and report how many the model gets right.
         rules              List rules and how many files each one governs.
+        providers          List the decision-model providers judgelint knows.
         init               Write .judgelint.yml and an example rule.
 
       Options:
         -c, --config PATH    Config file (default .judgelint.yml)
         -f, --format FORMAT  text or json
-            --provider NAME  typesafe, celeris, or openrouter
+            --provider NAME  A provider from `judgelint providers` (default typesafe)
             --model ID       Decision model id
             --threshold N    Violation probability that counts as a violation (default 0.7)
             --no-cache       Ask the model even when an answer is cached
@@ -50,6 +51,7 @@ module Judgelint
       when "check" then check
       when "test" then test
       when "rules" then list_rules
+      when "providers" then list_providers
       when "init" then init
       end
     rescue UsageError => e
@@ -150,6 +152,17 @@ module Judgelint
       rules.each do |rule|
         count = Glob.expand(rule.paths).count { |path| rule.applies_to?(path) }
         @out.puts format("%-24s %-8s %5d files  %s", rule.id, rule.severity, count, rule.question)
+      end
+      0
+    end
+
+    def list_providers
+      PROVIDERS.each do |name, preset|
+        model = preset["model"] || "(you choose)"
+        key = preset["api_key_env"] || "no key"
+        @out.puts format("%-13s %-28s %-22s %s", name, model, key, preset["api_base"] || "(your endpoint)")
+        need = PROVIDER_NEEDS[name]
+        @out.puts "              needs #{need}" if need
       end
       0
     end

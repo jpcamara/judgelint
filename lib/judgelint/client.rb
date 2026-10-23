@@ -1,70 +1,107 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # Posts rules to a System One endpoint (TypeSafe's Jev, Kev on OpenRouter,
-  # Celeris) over Net::HTTP. The body is the one RubyLLM's Judge API sends
-  # through its TypeSafe provider; judgelint speaks it directly so the same
-  # code compiles with Spinel.
+  # Asks a decision model the rules over Net::HTTP, in whichever protocol the
+  # provider speaks. Plain Net::HTTP rather than a gem keeps the same code
+  # compiling with Spinel.
   class Client
-    def initialize(config)
-      raise ConfigError, "Set api_base for provider #{config.provider}" if config.api_base.to_s.empty?
-      if !config.api_key_env.to_s.empty? && config.api_key.to_s.empty?
-        raise ConfigError, "Set #{config.api_key_env} to your #{config.provider} API key"
-      end
+    RETRY_STATUSES = %w[408 429 500 502 503 504 529].freeze
 
+    def initialize(config, sleeper: ->(seconds) { sleep(seconds) })
       @config = config
+      @protocol = Protocol.for(config.protocol)
+      @sleeper = sleeper
+      check_settings
     end
 
-    # Returns the probability of "yes" for each rule, keyed by question_key.
+    # Returns the probability of "yes" for each rule, keyed by question_key,
+    # or nil for a question the model refused.
     def judge(state, rules)
-      body = self.class.payload(@config.model, state, rules, @config.provider_options)
-      self.class.parse(post(JSON.generate(body)), rules)
+      body = @protocol.payload(@config.model, state, rules).merge(@config.provider_options)
+      @protocol.parse(self.class.unwrap(post(JSON.generate(body))), rules)
     end
 
-    def self.payload(model, state, rules, provider_options)
-      questions = {}
-      rules.each { |rule| questions[rule.question_key] = question(rule) }
-      { "model" => model, "state" => state, "questions" => questions }.merge(provider_options)
+    def url
+      base = ConfigLoader.expand(@config.api_base)
+      path = ConfigLoader.expand(@config.path).gsub("{model}", @config.model.to_s)
+      "#{base.delete_suffix('/')}/#{path.delete_prefix('/')}"
     end
 
-    def self.question(rule)
-      question = { "type" => "noul", "instructions" => rule.question }
-      criteria = {}
-      criteria["true"] = rule.yes_means if rule.yes_means
-      criteria["false"] = rule.no_means if rule.no_means
-      question["criteria"] = criteria unless criteria.empty?
-      question
+    # Cloudflare wraps the answers as {result: {...}, success, errors}.
+    def self.unwrap(data)
+      raise ApiError, "Response is not a JSON object" unless data.is_a?(Hash)
+
+      result = data["result"]
+      !data.key?("answers") && result.is_a?(Hash) && result.key?("answers") ? result : data
     end
 
-    def self.parse(body, rules)
-      answers = JSON.parse(body)["answers"]
-      raise ApiError, "Response has no answers: #{body[0, 200]}" unless answers.is_a?(Hash)
-
-      probabilities = {}
-      rules.each do |rule|
-        answer = answers[rule.question_key]
-        value = answer.is_a?(Hash) ? answer["noul"] : nil
-        raise ApiError, "No yes/no answer for #{rule.id}: #{answer.inspect}" unless value.is_a?(Numeric)
-
-        probabilities[rule.question_key] = value.to_f
-      end
-      probabilities
-    rescue JSON::ParserError
-      raise ApiError, "Response is not JSON: #{body[0, 200]}"
-    end
-
+    # The error message, whichever of the shapes providers use: TypeSafe's
+    # detail (a string, {message}, or a validation list), OpenAI's
+    # {error: {message}}, Cloudflare's errors list, or a bare message.
     def self.error_detail(body)
-      detail = JSON.parse(body)["detail"]
-      detail = detail["message"] if detail.is_a?(Hash)
-      detail.to_s.empty? ? body[0, 200] : detail.to_s
+      data = JSON.parse(body)
+      return body[0, 200] unless data.is_a?(Hash)
+
+      detail = data["detail"] || data["error"] || data["errors"] || data["message"]
+      message(detail) || body[0, 200]
     rescue JSON::ParserError
       body[0, 200]
     end
 
+    def self.message(detail)
+      case detail
+      when String then detail.empty? ? nil : detail
+      when Hash then message(detail["message"] || detail["msg"])
+      when Array
+        messages = detail.map { |item| message(item) }.compact
+        messages.empty? ? nil : messages.join("; ")
+      end
+    end
+
     private
 
+    def check_settings
+      provider = @config.provider
+      if @config.api_base.to_s.empty?
+        need = PROVIDER_NEEDS[provider] || "api_base"
+        raise ConfigError, "Provider #{provider} needs #{need} in .judgelint.yml"
+      end
+      raise ConfigError, "Provider #{provider} needs a model in .judgelint.yml" if model_needed?
+      raise ConfigError, "Set #{@config.api_key_env} to your #{provider} API key" if key_missing?
+
+      unless %w[bearer basic none].include?(@config.auth) || @config.auth.start_with?("header:")
+        raise ConfigError, "auth is bearer, basic, none, or header:<name>, not #{@config.auth}"
+      end
+    end
+
+    # llama.cpp serves one model and doesn't need its name; nothing else can guess it.
+    def model_needed?
+      @config.model.to_s.empty? && @config.provider != "llamacpp"
+    end
+
+    def key_missing?
+      @config.auth != "none" && !@config.api_key_env.to_s.empty? && @config.api_key.to_s.empty?
+    end
+
     def post(body)
-      uri = URI("#{@config.api_base.delete_suffix('/')}/v1/systemone")
+      attempt = 0
+      loop do
+        attempt += 1
+        response = request(body)
+        code = response.code
+        return parse_json(response.body.to_s) if code.start_with?("2")
+
+        detail = self.class.error_detail(response.body.to_s)
+        if RETRY_STATUSES.include?(code) && attempt <= @config.retries
+          @sleeper.call(retry_delay(response, attempt))
+          next
+        end
+        raise ApiError, "#{@config.provider} answered #{code}: #{detail}"
+      end
+    end
+
+    def request(body)
+      uri = URI(url)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
       http.open_timeout = @config.timeout
@@ -72,18 +109,38 @@ module Judgelint
 
       request = Net::HTTP::Post.new(uri.request_uri)
       request["Content-Type"] = "application/json"
-      key = @config.api_key
-      request["Authorization"] = "Bearer #{key}" if key
+      request["Accept"] = "application/json"
+      authorize(request)
+      @config.headers.each { |name, value| request[name.to_s] = ConfigLoader.expand(value.to_s) }
       request.body = body
-
-      response = http.request(request)
-      return response.body if response.code.start_with?("2")
-
-      raise ApiError, "#{uri} answered #{response.code}: #{self.class.error_detail(response.body.to_s)}"
+      http.request(request)
     rescue Judgelint::Error
       raise
     rescue StandardError => e
-      raise ApiError, "Couldn't reach #{uri}: #{e.message}"
+      raise ApiError, "Couldn't reach #{@config.provider} at #{url}: #{e.message}"
+    end
+
+    def authorize(request)
+      key = @config.api_key
+      return if key.to_s.empty?
+
+      case @config.auth
+      when "bearer" then request["Authorization"] = "Bearer #{key}"
+      when "basic" then request["Authorization"] = "Basic #{["token:#{key}"].pack("m0")}"
+      when "none" then nil
+      else request[@config.auth.delete_prefix("header:")] = key
+      end
+    end
+
+    def retry_delay(response, attempt)
+      after = RuleLoader.number(response["Retry-After"])
+      after ? [after, 30.0].min : 0.5 * (2**(attempt - 1))
+    end
+
+    def parse_json(body)
+      JSON.parse(body)
+    rescue JSON::ParserError
+      raise ApiError, "#{@config.provider} answered with something other than JSON: #{body[0, 200]}"
     end
   end
 end

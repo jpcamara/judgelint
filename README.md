@@ -124,31 +124,88 @@ leaks the answer.
 `.judgelint.yml`:
 
 ```yaml
-provider: typesafe        # typesafe (Jev), celeris, or openrouter (Kev)
-model: jev-latest
+provider: typesafe        # see `judgelint providers`
+model: jev-latest         # defaults to the provider's
 threshold: 0.7            # violation probability that counts as a violation
 warn_at: 0.4              # at least this, but below threshold, is reported as uncertain
 rules: .judgelint/rules
 cache: .judgelint/cache.json   # or false
 max_bytes: 60000          # larger files are reported as skipped, never passed
-batch_size: 32            # questions per request
 timeout: 30
-# api_base: https://api.typesafe.ai
-# api_key_env: TYPESAFE_API_KEY
-# provider_options: { x_celeris: { explain: true } }   # merged into the request body
+retries: 2                # for 408, 429, 5xx, and 529, honoring Retry-After
 ```
 
 Command-line flags override the file: `--provider`, `--model`, `--threshold`,
-`--no-cache`, `--config`, `--format json`.
+`--no-cache`, `--config`, `--format json`. Choosing a different provider on the
+command line drops the file's provider settings (model, api_base, and so on),
+so `judgelint test --provider openai` asks OpenAI for its own default model.
 
 ### Providers
 
-| `provider` | Model | Key | Notes |
+Decision models are served in two shapes. Most providers take TypeSafe's
+System One request (`{model, state, questions}` keyed by name, yes/no as
+`noul`). OpenAI's Decisions API takes `{model, input, questions: [...]}` with
+yes/no as `predicate`. judgelint speaks both, and the presets below set the
+URL, protocol, and auth for each provider. `judgelint providers` lists them.
+
+| `provider` | Default model | Key | Tested |
 |---|---|---|---|
-| `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` | Default. ~200 ms per request. |
-| `celeris` | `celeris-1-decision` | `CELERIS_API_KEY` | Best calibrated in our benchmarks. Not deterministic between runs. |
-| `openrouter` | `jaredpalmer/kev-4b` | `OPENROUTER_API_KEY` | Kev 4B through OpenRouter's System One endpoint. |
-| anything else | required | set `api_key_env` | Any System One endpoint: set `api_base` too. |
+| `typesafe` | `jev-latest` (`jev-preview` for Jev 1.14) | `TYPESAFE_API_KEY` | live, 10/10 |
+| `openrouter` | `typesafe/jev-1.13` (also `jaredpalmer/kev-4b`, and other decision models) | `OPENROUTER_API_KEY` | live, 10/10 (Kev 9/10) |
+| `celeris` | `celeris-1-decision` (also `celeris-1.1-decision`) | `CELERIS_API_KEY` | live, 10/10 both |
+| `cloudflare` | `clef` (also `clef-flash`, `clef-omni`) | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | live, 10/10 (omni 9/10) |
+| `openai` | `gpt-6-luna` (Decisions API) | `OPENAI_API_KEY` | live, 10/10 |
+| `perplexity` | `pplx-decider-latest` | `PERPLEXITY_API_KEY` | from docs |
+| `vercel` | `typesafe-ai/jev` (AI Gateway) | `AI_GATEWAY_API_KEY` | from docs |
+| `digitalocean` | `typesafe-jev-1.13.0` | `MODEL_ACCESS_KEY` | from docs |
+| `upstage` | `solar-decide` (beta) | `UPSTAGE_API_KEY` | from docs |
+| `hanzo` | `kai` | `HANZO_API_KEY` | from docs |
+| `foundry` | your deployment name; set `api_base` to your resource | `AZURE_API_KEY` | from docs |
+| `databricks` | a Unity Catalog name; set `api_base` to your workspace | `DATABRICKS_TOKEN` | from docs |
+| `ollama` | a model you've pulled | none (set `api_key_env` for ollama.com) | from docs |
+| `llamacpp` | none needed | none | from docs |
+| `vllm` | the served model | none | from docs |
+| `litellm` | a model your proxy routes | `LITELLM_API_KEY` | from docs |
+
+"Live" means `judgelint test` on this repo's own rule, run through the native
+binary on Oct 23, 2026; misses are the model's judgment, not the protocol.
+"From docs" means the preset follows the provider's published API, and the
+request shape is covered by tests, but it hasn't been run against the real
+service.
+
+Any other System One server works by setting the pieces yourself:
+
+```yaml
+provider: my-gateway
+api_base: https://gateway.example.com/${TEAM}       # ${VAR} reads the environment
+path: /v1/systemone        # {model} is replaced by the model id
+protocol: system_one       # or decisions
+auth: bearer               # basic (user "token"), none, or header:<name>
+api_key_env: GATEWAY_KEY
+model: some-decider
+batch_size: 64             # most questions the server takes per request
+headers:                   # sent with every request
+  TypeSafe-Danger-Zone-Long-Context: "true"
+provider_options:          # merged into the request body
+  x_celeris: { explain: true }
+```
+
+What judgelint handles for you:
+
+- The path doesn't decide the protocol. Perplexity and Hanzo take System One
+  bodies at `/v1/decisions`, and presets set `protocol` and `path` separately.
+- Cloudflare wraps answers in `{result: {...}}`; judgelint unwraps it.
+- A question the model refuses (OpenAI's `refusal` answer) is reported as
+  refused, not as a pass and not as a crash, and isn't cached.
+- Error messages are read from whichever shape the provider uses: TypeSafe's
+  `detail`, OpenAI's and OpenRouter's `error`, Cloudflare's `errors`, or `message`.
+- A preset that needs something from you says so (`Provider foundry needs
+  api_base (your Foundry resource endpoint)`), and a missing key is reported
+  before any request is sent.
+
+judgelint asks only yes/no questions, so the choice-option and score-level
+limits that differ between models don't apply. Context limits do: Kev 4B on
+OpenRouter takes 8,192 tokens, so lower `max_bytes` when you use it.
 
 ### Cache
 

@@ -52,6 +52,21 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_refusals_are_reported_not_passed_or_cached
+    in_project do
+      write("app/a.rb", "x")
+      client = FakeClient.new { nil }
+      cached = config(cache: ".judgelint/cache.json")
+
+      verdict = runner([rule], client, cached).run(["app/a.rb"]).first
+      assert_equal :refused, verdict.status
+      refute verdict.failing?
+
+      runner([rule], client, cached).run(["app/a.rb"])
+      assert_equal 2, client.calls.size
+    end
+  end
+
   def test_large_files_are_skipped_not_passed
     in_project do
       write("app/a.rb", "x" * 100)
