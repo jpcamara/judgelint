@@ -203,10 +203,12 @@ SPINEL=../spinel/bin/spinel rake test:spinel   # the tests, against it too
 ```
 
 On macOS and Linux, `gem install` picks a platform gem with the binary
-inside, statically linked, and `judgelint` runs it; elsewhere, Windows
-included, the gem runs as plain Ruby. Run directly, the binary starts in 4 ms
-against CRuby's 110, and in a 300-file benchmark it was 1.4x faster than
-CRuby on one thread and 2x on eight. The code stays inside what Spinel
+inside, statically linked, and links the `judgelint` command straight to it;
+elsewhere, Windows included, the gem runs as plain Ruby. The binary starts in
+4 ms against CRuby's 110, and in a 300-file benchmark it was 1.4x faster than
+CRuby on one thread and 2x on eight. Under Bundler, `bundle exec` spends about
+100 ms loading Bundler first; to skip it, link the binary
+(`ln -s "$(bundle info judgelint --path)/libexec/judgelint" bin/judgelint`). The code stays inside what Spinel
 compiles: plain classes instead of `Data.define`, a hand-written option
 parser, no gems.
 

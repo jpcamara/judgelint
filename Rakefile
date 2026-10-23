@@ -72,7 +72,7 @@ task "gem:native" => :spinel do
   # arm64-darwin, not arm64-darwin-24: without the OS version, any release
   # since the one the binary was built for can install it.
   spec.platform = Gem::Platform.new([Gem::Platform.local.cpu, Gem::Platform.local.os])
-  spec.files += ["libexec/judgelint"]
+  spec.files += ["libexec/judgelint", "lib/rubygems_plugin.rb"]
   mkdir_p "pkg"
   mv Gem::Package.build(spec), "pkg/"
 ensure
