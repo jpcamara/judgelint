@@ -1,8 +1,10 @@
 name: Native gems
 
 # Builds the Spinel binary on each platform, runs the test suite against it,
-# and packages the platform gems plus the plain Ruby one. Run it by hand or
-# by pushing a v* tag; the gems are uploaded as the run's artifacts.
+# and packages the platform gems plus the plain Ruby one, uploaded as the
+# run's artifacts. Run it by hand or by pushing a v* tag. A tag also gets a
+# GitHub release with each binary, for install.sh, and updates the formula
+# in jpcamara/homebrew-tap.
 on:
   workflow_dispatch:
   push:
@@ -20,10 +22,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14, platform: arm64-darwin }
-          - { os: macos-15-intel, platform: x86_64-darwin }
-          - { os: ubuntu-22.04, platform: x86_64-linux }
-          - { os: ubuntu-22.04-arm, platform: aarch64-linux }
+          - { os: macos-14, platform: arm64-darwin, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, platform: x86_64-darwin, target: x86_64-apple-darwin }
+          - { os: ubuntu-22.04, platform: x86_64-linux, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, platform: aarch64-linux, target: aarch64-unknown-linux-gnu }
     env:
       # The oldest macOS the binary runs on; Homebrew's OpenSSL on these
       # runners is built for the runner's own release.
@@ -71,3 +73,53 @@ jobs:
         with:
           name: gems-${{ matrix.platform }}
           path: pkg/*.gem
+
+      - name: Archive the binary
+        run: |
+          mkdir -p dist
+          tar --no-xattrs -czf "dist/judgelint-${{ matrix.target }}.tar.gz" -C build judgelint
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: dist/*.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+
+      - name: Release the binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes ./* \
+            || gh release upload "$GITHUB_REF_NAME" ./* --clobber
+
+      - uses: actions/checkout@v4
+        with:
+          repository: jpcamara/homebrew-tap
+          ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          path: homebrew-tap
+
+      - name: Update the Homebrew formula
+        run: |
+          ruby script/homebrew-formula "${GITHUB_REF_NAME#v}" dist/SHA256SUMS > homebrew-tap/Formula/judgelint.rb
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/judgelint.rb
+          git diff --cached --quiet || git commit -m "judgelint ${GITHUB_REF_NAME#v}"
+          git push

@@ -9,14 +9,17 @@ Answers take a few hundred milliseconds and cost a fraction of a cent.
 
 Inspired by [praxis](https://github.com/zarpay/praxis-cli), which reads the
 same kind of specs with chat models. judgelint trades praxis's written
-findings for speed and cost, and reads praxis's specs as they are. Ruby with
-no dependencies; also a native binary, built with
-[Spinel](https://github.com/matz/spinel).
+findings for speed and cost, and reads praxis's specs as they are. Written in
+Ruby with no dependencies, and compiled to a native binary with
+[Spinel](https://github.com/matz/spinel), so it doesn't need Ruby to run.
 
 ## Quick start
 
 ```sh
-gem install judgelint
+brew install jpcamara/tap/judgelint
+# or: curl -fsSL https://raw.githubusercontent.com/jpcamara/judgelint/main/install.sh | sh
+# or: gem install judgelint
+
 judgelint init                # .judgelint.yml and an example spec
 export TYPESAFE_API_KEY=...
 judgelint test                # judge the spec's examples
@@ -202,9 +205,13 @@ SPINEL=../spinel/bin/spinel rake spinel        # build/judgelint
 SPINEL=../spinel/bin/spinel rake test:spinel   # the tests, against it too
 ```
 
-On macOS and Linux, `gem install` picks a platform gem with the binary
-inside, statically linked, and links the `judgelint` command straight to it;
-elsewhere, Windows included, the gem runs as plain Ruby. The binary starts in
+Homebrew and `install.sh` (which installs to `~/.local/bin`, or
+`$JUDGELINT_INSTALL_DIR`, and takes `JUDGELINT_VERSION=v0.1.0`) install the
+binary from the [releases](https://github.com/jpcamara/judgelint/releases),
+for macOS and Linux on arm64 and x86_64; the Linux builds need glibc 2.35 or
+newer. On those platforms `gem install` picks a platform gem with the same
+binary inside and links the `judgelint` command straight to it; elsewhere,
+Windows included, the gem runs as plain Ruby. The binary starts in
 4 ms against CRuby's 110, and in a 300-file benchmark it was 1.4x faster than
 CRuby on one thread and 2x on eight. Under Bundler, `bundle exec` spends about
 100 ms loading Bundler first; to skip it, link the binary
