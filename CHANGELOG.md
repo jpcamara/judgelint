@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.4 (2026-10-24)
 
 - `Bad:` and `Good:` code blocks under a bullet are examples. The model reads
   them with the spec, and `judgelint test` judges each one, along with the
