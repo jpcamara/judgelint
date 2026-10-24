@@ -10,8 +10,8 @@ module Judgelint
     HELP = <<~TEXT
       Usage: judgelint [command] [options] [paths...]
 
-      Checks files against conventions written as bullets in READMEs, by asking a
-      System One decision model (Jev by default) whether the code breaks each one.
+      Checks code against the conventions in your specs. For each file and each
+      rule, it asks a decision model (Jev by default) whether the code breaks it.
 
       Commands:
         check [paths...]   Check the files the specs govern, or these (default).

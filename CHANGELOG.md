@@ -2,31 +2,32 @@
 
 ## 0.1.1 (2026-10-23)
 
-- `judgehint:` comments replace `judgelint:disable`. A hint says why the code
-  is the way it is; each rule asks whether it gives a reason the code may
-  break that rule, and reports the finding as excused if so.
-- Native binaries for macOS and Linux on each GitHub release, installable
+- `judgehint:` comments replace `judgelint:disable`. A hint explains why code
+  breaks a rule. judgelint asks each rule whether the hint gives a reason that
+  applies to it, and reports the finding as excused if it does.
+- Each GitHub release has native binaries for macOS and Linux. Install them
   with Homebrew (`brew install jpcamara/tap/judgelint`) or `install.sh`.
 
 ## 0.1.0 (2026-10-23)
 
-- Specs as praxis reads them: a README (or `*.judgelint.md`) with `paths:`
-  frontmatter, each top-level bullet a rule. The model reads the spec's prose
-  with the file and is asked whether the code breaks each bullet and whether
-  it follows it; optional `violation:` and `compliant:` lines sharpen a
-  bullet. Question rules in `.judgelint/rules/` for conventions a bullet
-  can't carry.
-- Window, file, and directory scopes; `context:` files the model reads but
-  never judges; line ranges on findings.
-- `check`, `test` (examples under `.judgelint/examples/`), `rules`,
-  `providers`, and `init`; `--base` and `--pr` for changes; text, JSON,
-  GitHub annotations, and SARIF.
-- Every request planned and priced before it's sent, with `max_cost_usd`; a
-  cost line on every run; answers cached per model.
-- 16 provider presets over the System One and OpenAI Decisions protocols, and
-  `models:` to average several.
-- Inline `judgelint:disable` comments, with a required reason.
-- No runtime dependencies; platform gems for macOS and Linux carry a native
-  binary built with Spinel.
-- examples/scoop-society: praxis's TypeScript demo, checked against praxis's
-  verdicts.
+- Specs work the way praxis's do: a README or `*.judgelint.md` with `paths:`
+  in its frontmatter, where each top-level bullet is a rule. The model reads
+  the spec with the file, and each bullet is asked both ways and averaged.
+  `violation:` and `compliant:` lines under a bullet describe it more
+  precisely. Rules that don't fit in a bullet can be written as questions in
+  `.judgelint/rules/`.
+- Rules can apply to every 40 lines, a whole file, or a whole directory.
+  `context:` adds files the model reads but doesn't judge.
+- Commands: `check`, `test`, `rules`, `providers`, and `init`. `--base` and
+  `--pr` check only what changed. Output as text, JSON, GitHub annotations,
+  or SARIF.
+- Requests are planned and priced before any are sent, and `max_cost_usd`
+  stops an expensive run. Every run prints its cost, and answers are cached
+  per model.
+- 16 providers over the System One and OpenAI Decisions APIs. List more than
+  one in `models:` to average their answers.
+- `judgelint:disable` comments, with a required reason.
+- No runtime dependencies. The macOS and Linux gems include a native binary
+  built with Spinel.
+- `examples/scoop-society` runs judgelint on praxis's TypeScript demo and
+  compares the results with praxis's.

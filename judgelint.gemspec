@@ -8,12 +8,12 @@ Gem::Specification.new do |spec|
   spec.authors = ["JP Camara"]
   spec.email = ["johnpcamara@gmail.com"]
 
-  spec.summary = "Lint for conventions a linter can't check, judged by System One decision models."
+  spec.summary = "Checks code against conventions written in plain English, using decision models."
   spec.description = <<~TEXT
-    judgelint checks files against conventions that only a reader can judge. Each
-    rule is a yes/no question answered by a fast decision model such as TypeSafe's
-    Jev over the System One protocol. It also compiles to a native binary with
-    Spinel.
+    judgelint checks code against conventions you write as bullets in a README.
+    It asks a decision model, such as TypeSafe's Jev, whether each file breaks
+    each bullet, and reports violations with line numbers. On macOS and Linux
+    the gem includes a native binary.
   TEXT
   spec.homepage = "https://github.com/jpcamara/judgelint"
   spec.license = "MIT"
