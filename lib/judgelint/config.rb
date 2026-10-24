@@ -73,7 +73,7 @@ module Judgelint
   end
 
   # One model to ask, and how to reach it: a provider preset and model id
-  # ("typesafe", "cloudflare:clef", "openrouter:jaredpalmer/kev-4b"), or a
+  # ("typesafe", "cloudflare:clef", "openrouter:typesafe/jev-1.13"), or a
   # mapping for an endpoint judgelint has no preset for.
   class Endpoint
     KEYS = %w[

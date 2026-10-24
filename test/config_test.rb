@@ -22,10 +22,10 @@ class ConfigTest < Minitest::Test
 
   def test_models_as_provider_and_model
     in_project do
-      write(".judgelint.yml", "models: [typesafe, \"cloudflare:clef\", \"openrouter:jaredpalmer/kev-4b\"]\nthreshold: 0.6\n")
+      write(".judgelint.yml", "models: [typesafe, \"cloudflare:clef\", \"openrouter:typesafe/jev-1.13\"]\nthreshold: 0.6\n")
       config = Judgelint::Config.load
 
-      assert_equal %w[typesafe:jev-latest cloudflare:clef openrouter:jaredpalmer/kev-4b], config.models.map(&:label)
+      assert_equal %w[typesafe:jev-latest cloudflare:clef openrouter:typesafe/jev-1.13], config.models.map(&:label)
       assert_in_delta 0.6, config.threshold
       assert_in_delta 0.3, config.warn_at
     end
