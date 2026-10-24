@@ -5,10 +5,10 @@ module Judgelint
   #
   # +status+ is :violation (at or above the rule's threshold), :uncertain
   # (between warn_at and the threshold), :pass, :skipped (the file is too
-  # large to judge), :refused (the model declined the question), or
-  # :suppressed (a judgelint:disable comment covers it). Skipped and refused
-  # files are reported, never silently passed. +lines+ is the [first, last]
-  # range the verdict came from.
+  # large to judge), :refused (the model declined the question), or :excused
+  # (a violation or uncertain, but a judgehint excuses it). Skipped and
+  # refused files are reported, never silently passed. +lines+ is the [first,
+  # last] range the verdict came from.
   #
   # An example's verdict also knows the answer it should have had: +expected+
   # is :pass or :fail for files under rules/<id>/pass and rules/<id>/fail.
@@ -43,10 +43,10 @@ module Judgelint
       status == :violation && rule.error?
     end
 
-    # A refused, skipped, or suppressed example is a miss either way: the rule
-    # didn't work on it.
+    # A refused or skipped example is a miss either way: the rule didn't work
+    # on it. An excused one isn't a violation.
     def correct?
-      return false if %i[refused skipped suppressed].include?(status)
+      return false if %i[refused skipped].include?(status)
 
       (status == :violation) == (expected == :fail)
     end

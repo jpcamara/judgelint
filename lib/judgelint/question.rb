@@ -8,21 +8,33 @@ module Judgelint
   # answer flipped, whether the code follows it. Decision models lean toward
   # no on the first and yes on the second, so the average is steadier than
   # either.
+  #
+  # Code with a judgehint comment is also asked whether the hint excuses it
+  # from the rule. Asked on its own, a decision model answers that sharply;
+  # told about hints inside the rule's question, it only hedges.
   class Question
     BREAKS = "The code clearly breaks the rule."
     FOLLOWS = "The code follows the rule, or the rule doesn't apply to it."
+    EXCUSED = "A judgehint comment is about this rule, and gives a reason the code may break it."
+    NOT_EXCUSED = "No judgehint comment is about this rule. Any judgehint is about a different rule, or gives no reason."
 
     attr_reader :rule, :first, :last
 
-    def initialize(rule, first, last, inverted: false)
+    def initialize(rule, first, last, inverted: false, excuse: false)
       @rule = rule
       @first = first
       @last = last
       @inverted = inverted
+      @excuse = excuse
+    end
+
+    def excuse?
+      @excuse
     end
 
     def key
       base = "#{rule.question_key}.#{first}-#{last}"
+      return "#{base}.excused" if @excuse
       return base unless rule.convention
 
       @inverted ? "#{base}.follows" : "#{base}.breaks"
@@ -36,6 +48,7 @@ module Judgelint
     # "Answer yes only when..." keeps the model from flagging code the rule
     # doesn't cover.
     def instructions
+      return excuse_instructions if @excuse
       return convention_instructions if rule.convention
 
       text = rule.window? ? "Look at lines #{first}-#{last} of the file; the rest is context. #{rule.question}" : rule.question
@@ -47,12 +60,14 @@ module Judgelint
     end
 
     def yes_means
+      return EXCUSED if @excuse
       return rule.yes_means unless rule.convention
 
       @inverted ? rule.no_means || FOLLOWS : rule.yes_means || BREAKS
     end
 
     def no_means
+      return NOT_EXCUSED if @excuse
       return rule.no_means unless rule.convention
 
       @inverted ? rule.yes_means || BREAKS : rule.no_means || FOLLOWS
@@ -63,6 +78,13 @@ module Judgelint
     end
 
     private
+
+    def excuse_instructions
+      where = { "window" => "in lines #{first}-#{last} of the file", "file" => "in the file", "directory" => "in the files" }
+              .fetch(rule.scope)
+      "Does a judgehint comment #{where} explain why the code intentionally departs from the following team " \
+        "rule, with a reason specific to this rule? Rule: #{rule.convention || rule.message}"
+    end
 
     # The spec's prose is in the state as team_rules, so the bullet is "the
     # following team rule".

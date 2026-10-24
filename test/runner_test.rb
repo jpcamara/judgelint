@@ -260,38 +260,45 @@ class RunnerTest < Minitest::Test
     end
   end
 
-  def test_suppressions_cover_their_window_or_the_whole_file
+  def test_a_judgehint_is_asked_about_for_its_window_only
     in_project do
-      write("app/a.rb", ["# judgelint:disable smell -- reviewed: the rescue re-raises", *(["x"] * 59)].join("\n"))
-      write("app/b.rb", "# judgelint:disable-file smell, other -- generated\nx\n")
-      client = FakeClient.new { 0.9 }
-      verdicts = judge([rule("smell"), rule("other")], client, %w[app/a.rb app/b.rb])
+      write("app/a.rb", ["# judgehint: the rescue re-raises after logging", *(["x"] * 59)].join("\n"))
+      client = FakeClient.new { |_state, question| question.key.include?("41-60") ? 0.1 : 0.9 }
+      verdict = judge([rule("smell")], client, ["app/a.rb"]).first
 
-      assert_equal [%w[smell.41-60 other.1-40 other.41-60]], client.calls.map(&:last)
-      assert_equal %i[violation violation suppressed suppressed], verdicts.map(&:status)
+      assert_equal [%w[smell.1-40 smell.1-40.excused smell.41-60]], client.calls.map(&:last)
+      assert_equal [:excused, [1, 40], 0.9], [verdict.status, verdict.lines, verdict.probability]
+      assert verdict.as_example(:pass).correct?, "an excused example isn't a violation"
+      refute verdict.as_example(:fail).correct?
     end
   end
 
-  def test_suppressions_are_only_read_from_comments
+  def test_a_judgehint_that_does_not_excuse_the_code_leaves_the_violation
     in_project do
-      write("app/a.rb", %(raise "\#{path}: judgelint:disable needs a reason"\n// judgelint:disable smell -- js style\n))
-      client = FakeClient.new { 0.9 }
-      verdicts = judge([rule], client, ["app/a.rb"])
+      write("app/a.rb", "# judgehint: written quickly\nx\n")
+      client = FakeClient.new { |_state, question| question.excuse? ? 0.2 : 0.9 }
+      verdicts = judge([rule("smell")], client, ["app/a.rb"])
 
-      assert_empty client.calls
-      assert_equal [:suppressed], verdicts.map(&:status)
+      assert_equal [:violation], verdicts.map(&:status)
     end
   end
 
-  def test_suppressions_need_a_reason_and_a_known_rule
+  def test_a_violation_elsewhere_outranks_an_excused_window
     in_project do
-      write("app/a.rb", "x # judgelint:disable smell\n")
-      error = assert_raises(Judgelint::ConfigError) { runner([rule], FakeClient.new { 0.1 }).plan(["app/a.rb"]) }
-      assert_match(%r{app/a.rb:1: judgelint:disable needs rule ids and a reason}, error.message)
+      write("app/a.rb", ["# judgehint: intentional", *(["x"] * 59)].join("\n"))
+      verdict = judge([rule("smell")], FakeClient.new { 0.9 }, ["app/a.rb"]).first
 
-      write("app/a.rb", "x # judgelint:disable smel -- typo\n")
-      error = assert_raises(Judgelint::ConfigError) { runner([rule], FakeClient.new { 0.1 }).plan(["app/a.rb"]) }
-      assert_match(/unknown rules smel/, error.message)
+      assert_equal [:violation, [41, 60]], [verdict.status, verdict.lines]
+    end
+  end
+
+  def test_judgehints_are_only_read_from_comments
+    in_project do
+      write("app/a.rb", %(raise "judgehint: not a comment"\n))
+      client = FakeClient.new { 0.9 }
+      judge([rule], client, ["app/a.rb"])
+
+      refute(client.calls.flat_map(&:last).any? { |key| key.end_with?(".excused") })
     end
   end
 

@@ -5,8 +5,8 @@ module Judgelint
   # goes to stdout; anything else goes to stderr.
   class Reporter
     FORMATS = %w[text json github sarif].freeze
-    MARKS = { violation: "x", uncertain: "?", skipped: "-", refused: "-", suppressed: "-" }.freeze
-    STATUSES = %w[violation uncertain pass skipped refused suppressed].freeze
+    MARKS = { violation: "x", uncertain: "?", skipped: "-", refused: "-", excused: "-" }.freeze
+    STATUSES = %w[violation uncertain pass skipped refused excused].freeze
 
     def initialize(out, format:)
       @out = out
@@ -76,7 +76,7 @@ module Judgelint
       parts << "#{counts[:uncertain]} uncertain" if counts[:uncertain]
       parts << "#{counts[:skipped]} skipped (too large)" if counts[:skipped]
       parts << "#{counts[:refused]} refused by the model" if counts[:refused]
-      parts << "#{counts[:suppressed]} suppressed" if counts[:suppressed]
+      parts << "#{counts[:excused]} excused by judgehints" if counts[:excused]
       parts.join(", ")
     end
 

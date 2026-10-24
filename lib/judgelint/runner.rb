@@ -14,18 +14,17 @@ module Judgelint
     # One file's work: the questions to ask, each model's answers (from the
     # cache or the model), and the requests still to send.
     class Job
-      attr_reader :source, :state, :state_digest, :questions, :suppressed, :answers, :requests, :expected
+      attr_reader :source, :state, :state_digest, :questions, :answers, :requests, :expected
       attr_accessor :skipped
 
       # The state is built and hashed once: it's the whole file, and every
       # question's cache key needs its hash. Rules from a spec read its prose
       # alongside the file, as team_rules.
-      def initialize(source, questions, suppressed, prose: nil, expected: nil)
+      def initialize(source, questions, prose: nil, expected: nil)
         @source = source
         @state = prose ? { "team_rules" => prose, "file" => source.state } : source.state
         @state_digest = Digest::SHA256.hexdigest(JSON.generate(@state))
         @questions = questions
-        @suppressed = suppressed
         @answers = {} # model index => {question key => probability or nil}
         @requests = []
         @expected = expected
@@ -143,28 +142,20 @@ module Judgelint
     end
 
     def plan_file(source, rules, lines, expected: nil)
-      unknown = source.suppressed_ids - @rules.map(&:id)
-      raise ConfigError, "#{source.path}: judgelint:disable names unknown rules #{unknown.join(', ')}" unless unknown.empty?
-
       questions = {}
-      suppressed = []
       rules.each do |rule|
         ranges = rule.ranges(source, Config::WINDOW_LINES).select { |first, last| touched?(lines, first, last) }
         next if ranges.empty?
 
-        kept = ranges.reject { |first, last| source.suppressed?(rule.id, first, last) }
-        if kept.empty?
-          suppressed << rule
-        else
-          asked = []
-          kept.each do |first, last|
-            asked << Question.new(rule, first, last)
-            asked << Question.new(rule, first, last, inverted: true) if rule.convention
-          end
-          questions[rule] = asked
+        asked = []
+        ranges.each do |first, last|
+          asked << Question.new(rule, first, last)
+          asked << Question.new(rule, first, last, inverted: true) if rule.convention
+          asked << Question.new(rule, first, last, excuse: true) if source.hinted?(first, last)
         end
+        questions[rule] = asked
       end
-      job = Job.new(source, questions, suppressed, prose: rules.first&.prose, expected: expected)
+      job = Job.new(source, questions, prose: rules.first&.prose, expected: expected)
       pack(job)
       job
     end
@@ -236,28 +227,57 @@ module Judgelint
     def verdicts(job)
       path = job.source.path
       found = job.questions.map { |rule, questions| verdict_for(rule, path, questions, job) }
-      found += job.suppressed.map { |rule| Verdict.new(rule: rule, path: path, probability: nil, status: :suppressed) }
       job.expected ? found.map { |verdict| verdict.as_example(job.expected) } : found
     end
 
     # A window's probability of a violation is the average over its questions
     # (a bullet is asked both ways) and the models; a rule's verdict is its
-    # worst window.
+    # worst window. A window whose judgehint excuses it, by the same average
+    # and threshold, is reported as excused instead, unless another window
+    # breaks the rule.
     def verdict_for(rule, path, questions, job)
       return Verdict.new(rule: rule, path: path, probability: nil, status: :skipped) if job.skipped
 
-      windows = []
+      open = []
+      excused = []
       questions.group_by { |question| [question.first, question.last] }.each do |(first, last), asked|
         values = []
+        excuses = []
         asked.each do |question|
           job.answers.each_value do |answers|
             yes = answers[question.key]
-            values << question.violation(yes) unless yes.nil?
+            next if yes.nil?
+
+            if question.excuse?
+              excuses << yes
+            else
+              values << question.violation(yes)
+            end
           end
         end
-        windows << [first, last, values.sum / values.size] unless values.empty?
+        next if values.empty?
+
+        window = [first, last, values.sum / values.size]
+        if !excuses.empty? && excuses.sum / excuses.size >= rule.threshold
+          excused << window
+        else
+          open << window
+        end
       end
-      return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if windows.empty?
+      return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if open.empty? && excused.empty?
+
+      found = worst(rule, path, open)
+      return found if found && found.status != :pass
+
+      hidden = worst(rule, path, excused)
+      return found || hidden if hidden.nil? || hidden.status == :pass
+
+      Verdict.new(rule: rule, path: path, probability: hidden.probability, status: :excused, lines: hidden.lines)
+    end
+
+    # The worst of +windows+ ([first, last, probability]), or nil if there are none.
+    def worst(rule, path, windows)
+      return nil if windows.empty?
 
       first, last, probability = windows.max_by { |window| window[2] }
       lines = rule.directory? ? nil : [first, last]

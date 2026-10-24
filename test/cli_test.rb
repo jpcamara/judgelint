@@ -41,7 +41,7 @@ class CLITest < Minitest::Test
         data = JSON.parse(out)
 
         assert_equal({ "violation" => 1, "uncertain" => 0, "pass" => 0, "skipped" => 0, "refused" => 0,
-                       "suppressed" => 0 }, data["summary"], name)
+                       "excused" => 0 }, data["summary"], name)
         assert_equal 1, data["usage"]["requests"], name
         assert_equal "smell", data["results"].first["rule"], name
         assert_equal [1, 1], data["results"].first["lines"], name

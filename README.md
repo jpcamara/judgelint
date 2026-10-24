@@ -114,9 +114,17 @@ Every file in a feature is reachable from index.ts.
 `fail_when: no` inverts a question like "Does this service validate its
 input first?".
 
-**Suppress** a finding where a person has decided the code is fine, with a
-reason: `# judgelint:disable <rule> -- <reason>` covers the 40 lines it's in,
-and `judgelint:disable-file` the whole file. Any comment style works.
+**Explain an exception** with a `judgehint:` comment, in any comment style:
+
+```ts
+// judgehint: throwing is intentional. Only the nightly job calls this, after
+// checking the review, so a bad id here is a programmer error.
+```
+
+For each rule, code with a hint in its 40 lines is also asked whether the
+hint gives a reason it may break that rule. If so, the finding is reported as
+excused rather than as a violation. A hint excuses only the rule its reason
+is about, and one with no reason ("this is intentional") excuses nothing.
 
 ## Examples
 
