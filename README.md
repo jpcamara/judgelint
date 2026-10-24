@@ -6,10 +6,6 @@ TypeSafe's Jev, whether each file breaks each bullet, and reports violations
 with line numbers and an exit code like any other linter. Each answer takes a
 few hundred milliseconds and costs a fraction of a cent.
 
-It's based on [praxis](https://github.com/zarpay/praxis-cli) and reads praxis
-specs as they are. praxis uses chat models, which explain their findings.
-Decision models only answer yes or no, but they're much faster and cheaper.
-
 ## Install
 
 ```sh
@@ -34,7 +30,7 @@ judgelint                 # checks every file a spec covers
 judgelint --base main     # checks only what changed since main
 ```
 
-Here's a run on praxis's demo app, with the messages shortened:
+Here's a run on the [demo app](examples/scoop-society), with the messages shortened:
 
 ```text
 $ judgelint src/services/apply-refund.ts src/features/flavor-of-day
@@ -93,7 +89,7 @@ you meant to allow, so check them against examples.
 |---|---|
 | `paths`, `excludes` | Globs for the files the spec covers, relative to the project root. |
 | `context` | Files the model reads along with each file, like shared types. They're never judged. |
-| `scope` | `window`, the default, asks about every 40 lines so findings have line numbers. `file` asks once per file. `directory` asks once per directory and shows the model every file in it. praxis's `cohort: by_file` and `by_directory` also work. |
+| `scope` | `window`, the default, asks about every 40 lines so findings have line numbers. `file` asks once per file. `directory` asks once per directory and shows the model every file in it. |
 | `severity`, `threshold` | Set the severity or threshold for every rule in the spec. |
 
 Each answer is the probability that the code breaks the rule. At 0.7 or above
@@ -180,9 +176,9 @@ Every run prints what it cost. Answers are cached in `.judgelint/cache.json`,
 so a file that hasn't changed costs nothing. Commit the cache to share it.
 `judgelint --help` lists the flags.
 
-Two models give steadier answers. On praxis's demo, Jev alone leaves about 10
-findings uncertain, and Jev averaged with Cloudflare's Clef leaves 4, for
-about $0.02 a run. The [demo](examples/scoop-society) compares the models.
+Two models give steadier answers. On the [demo app](examples/scoop-society),
+Jev alone leaves about 10 findings uncertain, and Jev averaged with
+Cloudflare's Clef leaves 4, for about $0.02 a run.
 
 ### Providers
 
@@ -215,10 +211,15 @@ bundle exec rake test
 git clone https://github.com/matz/spinel ../spinel && (cd ../spinel && make deps && make)
 SPINEL=../spinel/bin/spinel bundle exec rake spinel        # builds build/judgelint
 SPINEL=../spinel/bin/spinel bundle exec rake test:spinel   # runs the tests against the binary
-bundle exec rake example                                   # asks Jev about praxis's demo again
+bundle exec rake example                                   # asks Jev about the demo app again
 ```
+
+## Credits
+
+judgelint was inspired by [praxis](https://github.com/zarpay/praxis-cli), and
+it reads praxis specs, including `cohort: by_file` and `by_directory`. The
+demo app in [examples/scoop-society](examples/scoop-society) comes from praxis.
 
 ## License
 
-MIT. The demo app in [examples/scoop-society](examples/scoop-society) comes
-from praxis and keeps praxis's MIT license.
+MIT. The demo app keeps praxis's MIT license.

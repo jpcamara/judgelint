@@ -10,8 +10,8 @@
 
 ## 0.1.0 (2026-10-23)
 
-- Specs work the way praxis's do: a README or `*.judgelint.md` with `paths:`
-  in its frontmatter, where each top-level bullet is a rule. The model reads
+- Specs: a README or `*.judgelint.md` with `paths:` in its frontmatter,
+  where each top-level bullet is a rule. The model reads
   the spec with the file, and each bullet is asked both ways and averaged.
   `violation:` and `compliant:` lines under a bullet describe it more
   precisely. Rules that don't fit in a bullet can be written as questions in
@@ -29,5 +29,4 @@
 - `judgelint:disable` comments, with a required reason.
 - No runtime dependencies. The macOS and Linux gems include a native binary
   built with Spinel.
-- `examples/scoop-society` runs judgelint on praxis's TypeScript demo and
-  compares the results with praxis's.
+- `examples/scoop-society`, a TypeScript demo app with known violations.

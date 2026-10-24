@@ -1,13 +1,8 @@
 # Scoop Society
 
-This is the demo app from [praxis](https://github.com/zarpay/praxis-cli), at
-commit `02a4bbd`. It's a small TypeScript API for ice cream parlor reviews.
-Its conventions are written as three README specs, and some of the code breaks
-them on purpose. The code and specs belong to praxis and keep its MIT license
-([LICENSE.praxis](LICENSE.praxis)).
-
-judgelint reads the READMEs unchanged. Each top-level bullet is a rule, 22 in
-all:
+A small TypeScript API for ice cream parlor reviews. Its conventions are
+written as three README specs, and some of the code breaks them on purpose.
+Each top-level bullet is a rule, 22 in all:
 
 | Spec | Covers | Rules |
 |---|---|---|
@@ -15,14 +10,14 @@ all:
 | [src/features/README.md](src/features/README.md) | each feature directory, with the domain types and store as context | 6 |
 | [tests/README.md](tests/README.md) | each test file | 8 |
 
-[.judgelint.yml](.judgelint.yml) is the only file added for judgelint. It
-ignores underscore files and generated files, like praxis does.
+[.judgelint.yml](.judgelint.yml) ignores underscore files and generated
+files.
 
 ## Results
 
-[expected.json](expected.json) lists the 13 violations praxis found with
-Mercury 2.5, a chat model, plus one it missed: `update-parlor-hours.ts` builds
-`summary` and `label` before validating its input.
+[expected.json](expected.json) lists the 14 known violations. Thirteen come
+from praxis's own review of the app. The other is `update-parlor-hours.ts`,
+which builds `summary` and `label` before validating its input.
 
 With Jev and the specs as written, judgelint finds 12 of the 14, with no false
 positives and 9 to 11 uncertain findings. A run is 20 requests and costs about
@@ -71,3 +66,8 @@ The answers are cached in `.judgelint/cache.json`, so running `judgelint` in
 this directory replays them without an API key. `rake example` asks Jev again
 and compares the result with `expected.json`. `test/example_test.rb` replays
 the cache through the gem and the binary and checks the same thing.
+
+## Credits
+
+The app and its specs come from [praxis](https://github.com/zarpay/praxis-cli)
+at commit `02a4bbd`, under its MIT license ([LICENSE.praxis](LICENSE.praxis)).
