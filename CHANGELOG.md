@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `Bad:` and `Good:` code blocks under a bullet are examples. The model reads
+  them with the spec, and `judgelint test` judges each one, along with the
+  files in `.judgelint/examples/`.
+- `judgelint init` writes a `CONVENTIONS.md` with examples in it.
+- `examples/conventions` has complete specs for Ruby, TypeScript, Python, and
+  Postgres migrations.
+
 ## 0.1.3 (2026-10-24)
 
 - No setup beyond `TYPESAFE_API_KEY`. A `CONVENTIONS.md` of bullets is a

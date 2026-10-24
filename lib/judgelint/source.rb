@@ -18,11 +18,12 @@ module Judgelint
       new(dir, shown_as: shown_as, files: files, context: context, directory: true)
     end
 
-    def initialize(path, shown_as: path, files: [path], context: [], directory: false)
+    # +text+ is the file's contents when it isn't on disk, like an example in a spec.
+    def initialize(path, shown_as: path, files: [path], context: [], directory: false, text: nil)
       @path = path
       @shown_as = shown_as
       @directory = directory
-      @files = files.map { |file| [file, File.read(file).lines] }
+      @files = text ? [[path, text.lines]] : files.map { |file| [file, File.read(file).lines] }
       @context = context
       @line_count = @files.sum { |_file, lines| lines.size }
       @hints = []

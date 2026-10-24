@@ -1,0 +1,197 @@
+{
+  "13c4dde5d8b6970d4b8973f1c02ec39ae91d7c8930a84467675c912fbb75629d": {
+    "breaks": 0.98,
+    "follows": 0.02,
+    "not_applicable": 0.0
+  },
+  "1d25037e0760fa2ffc4125a6fc11ae4e37d2665f5d53053eeeee8c278abd980d": {
+    "breaks": 0.0,
+    "follows": 1.0,
+    "not_applicable": 0.0
+  },
+  "26a5b4d23cd185d42416a60a82006782c29704a73df00c11b4b35be7e7dae020": {
+    "L1": 0.21,
+    "L2": 0.03,
+    "L3": 0.73,
+    "L4": 0.03
+  },
+  "2bf925fcf2bebf20cb45fef55873b180dfcfd82bb7eb4058020637592c2ca122": {
+    "L1": 0.43,
+    "L2": 0.34,
+    "L3": 0.02,
+    "L4": 0.01,
+    "L5": 0.16,
+    "L6": 0.01,
+    "L7": 0.01,
+    "L8": 0.02
+  },
+  "4a74f8ff9b7a3e12cf9201a2b3e4443924c718a18c7186b7b59936ba9bd16c8a": {
+    "breaks": 1.0,
+    "follows": 0.0,
+    "not_applicable": 0.0
+  },
+  "4e7070317a99a92f19e3162f2358dba05613c1e27cddeae27bd485e0867c59ec": {
+    "breaks": 0.0,
+    "follows": 1.0,
+    "not_applicable": 0.0
+  },
+  "5125af4416f0a092b73d45838f1397a1aa7585e481cc3e673df1e396690834e5": {
+    "L1": 0.7,
+    "L2": 0.02,
+    "L3": 0.24,
+    "L4": 0.02,
+    "L5": 0.02
+  },
+  "54c8755ba9d9089dc8172d63db9462b773b08daf03f87878d956a342870fc0f8": {
+    "breaks": 0.01,
+    "follows": 0.99,
+    "not_applicable": 0.0
+  },
+  "5ca08fe74aa964c8047f08fbd117f75b6afd294b70a466c4f4c94c868444508a": {
+    "breaks": 0.0,
+    "follows": 0.95,
+    "not_applicable": 0.05
+  },
+  "62d9cac500a3fae815f6d14bf1c7e5f024ca79532e27364f77949b0a2b4bef3c": {
+    "breaks": 0.0,
+    "follows": 0.98,
+    "not_applicable": 0.02
+  },
+  "683fb2aa13bb83a7f5a308efd076cd7519a27972e9152bedb6a7bd1eec1a515e": {
+    "breaks": 1.0,
+    "follows": 0.0,
+    "not_applicable": 0.0
+  },
+  "72ab1282a90ad872a1bd6fcbfd5fc8374e208bfa2b7c768fad3862d0a5ced74d": {
+    "L1": 0.64,
+    "L2": 0.06,
+    "L3": 0.01,
+    "L4": 0.0,
+    "L5": 0.28,
+    "L6": 0.01,
+    "L7": 0.0,
+    "L8": 0.0
+  },
+  "82cce8a79d342de11efe7a7960022d6429c34dda389c89109ceb63cfbecf7990": {
+    "L1": 0.6,
+    "L2": 0.24,
+    "L3": 0.07,
+    "L4": 0.05,
+    "L5": 0.04
+  },
+  "87ad1d98c22ac27074e7ccd2e382f6df301a33ce9a59c762450aa33623603b12": {
+    "L1": 0.1,
+    "L2": 0.02,
+    "L3": 0.01,
+    "L4": 0.78,
+    "L5": 0.09
+  },
+  "88324b25be257af8dbdb682f7e30a57a7a7b4b91f096933d80c835aab6a7f5f8": {
+    "L1": 0.0,
+    "L2": 0.0,
+    "L3": 0.0,
+    "L4": 1.0,
+    "L5": 0.0,
+    "L6": 0.0,
+    "L7": 0.0
+  },
+  "9355230fa7566cb940129a8821f0d90a68040efbe01adf0e0563d12fb49a258c": {
+    "L1": 0.0,
+    "L2": 1.0,
+    "L3": 0.0
+  },
+  "99ced11ac1a4a372b8e313f5f9e4ff4dbd7450665ad2049a6f2cb10e4cfef6d7": {
+    "L1": 0.0,
+    "L2": 0.0,
+    "L3": 0.0,
+    "L4": 0.0,
+    "L5": 1.0,
+    "L6": 0.0,
+    "L7": 0.0,
+    "L8": 0.0,
+    "L9": 0.0
+  },
+  "a39449465e3adfd7c5d7b1b44ad38de3d15dd299b781a84d6676bf61f9656896": {
+    "L1": 0.03,
+    "L2": 0.01,
+    "L3": 0.01,
+    "L4": 0.01,
+    "L5": 0.01,
+    "L6": 0.01,
+    "L7": 0.52,
+    "L8": 0.29,
+    "L9": 0.11
+  },
+  "b4076564597743f518fe0e3d1f0ba45d63ba47020bd7df642b4279ff912e5a6a": {
+    "L1": 0.86,
+    "L2": 0.1,
+    "L3": 0.04
+  },
+  "be179c01d84b55991af185b25378aaf8dc139c5bebdc2e26bee05b4619ca7ae8": {
+    "breaks": 0.0,
+    "follows": 0.92,
+    "not_applicable": 0.08
+  },
+  "c1a9f5c3887acf2b7eb1ee4f8ec131ddd785c3cdc55b2e629f0e00ed110815a8": {
+    "L1": 1.0,
+    "L2": 0.0,
+    "L3": 0.0
+  },
+  "c91b5bc659fb1c80231fa94987027caf76e71b993e1dbe84d66671487a9db3c9": {
+    "L1": 0.0,
+    "L2": 0.0,
+    "L3": 0.02,
+    "L4": 0.06,
+    "L5": 0.91,
+    "L6": 0.01,
+    "L7": 0.0,
+    "L8": 0.0
+  },
+  "cbbce1b7d8523e29cb562615eedf189939c0725a08b4a9a2e4ad9dccfba8e6c8": {
+    "breaks": 0.0,
+    "follows": 1.0,
+    "not_applicable": 0.0
+  },
+  "cf21af5ab7a359e12f9189b5e840c6a15b75371509e267b219ea9d42bc478d62": {
+    "breaks": 0.0,
+    "follows": 1.0,
+    "not_applicable": 0.0
+  },
+  "df7f8a8e98e87c0283695aa81eb9c76da3e4bb7170a1461d77cb9fc3cf8e83ec": {
+    "L1": 0.12,
+    "L2": 0.01,
+    "L3": 0.5700000000000001,
+    "L4": 0.0,
+    "L5": 0.27,
+    "L6": 0.0,
+    "L7": 0.0,
+    "L8": 0.01,
+    "L9": 0.01
+  },
+  "e104c3be71ea9cdf735990e273bce5f9746e662412894ca2a80ec18e614d59f4": {
+    "breaks": 0.0,
+    "follows": 0.99,
+    "not_applicable": 0.01
+  },
+  "e50b9b12dc1a4050f3c6278e4a47d8e98153176f6dddcf1e353e70dc8ddac043": {
+    "L1": 0.15,
+    "L2": 0.84,
+    "L3": 0.01,
+    "L4": 0.0
+  },
+  "e9e6da6ae4296d7512794e9c231e9080e29d7f2682a0e5f90d79ee1df9287a95": {
+    "breaks": 1.0,
+    "follows": 0.0,
+    "not_applicable": 0.0
+  },
+  "f7324f774a4b26c11621b47df4a075a75e772a59a1f39d07b1ce38f0260bd573": {
+    "breaks": 1.0,
+    "follows": 0.0,
+    "not_applicable": 0.0
+  },
+  "fe863deebe172e966b61ba1033224136771ee38c3c828c6f60a89e148274f810": {
+    "breaks": 0.0,
+    "follows": 0.93,
+    "not_applicable": 0.07
+  }
+}

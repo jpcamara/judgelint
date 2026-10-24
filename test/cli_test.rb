@@ -310,7 +310,7 @@ class CLITest < Minitest::Test
       runners.each do |name, run|
         status, _out, err = run.call(["test"])
         assert_equal 2, status, name
-        assert_match(%r{Examples need both kinds: add some to \.judgelint/rules/smell/pass/}, err, name)
+        assert_match(%r{Examples need both kinds: add \.judgelint/rules/smell/pass/}, err, name)
       end
       assert_empty @server.requests
     end
@@ -377,16 +377,32 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_test_judges_bad_and_good_blocks_in_a_spec
+    in_project do
+      write("CONVENTIONS.md", "- **No smells.**\n\n  Bad:\n\n  ```ruby\n  SMELL\n  ```\n\n  Good:\n\n  ```ruby\n  fine\n  ```\n")
+      runners.each do |name, run|
+        status, out, = run.call(["test"])
+
+        # The stub sees SMELL in the spec itself, so it calls everything a violation.
+        assert_equal 1, status, name
+        assert_match(/^root\/no-smells  1\/2$/, out, name)
+        assert_match(/^  ok   fail 0\.90  CONVENTIONS\.md:6$/, out, name)
+        assert_match(/^  MISS pass 0\.90  CONVENTIONS\.md:12$/, out, name)
+      end
+    end
+  end
+
   def test_init_writes_a_working_example
     in_project do
       runners.each do |name, run|
         status, out, = run.call(["init"])
         assert_equal 0, status, name
-        assert_match(%r{\.judgelint/rules/ruby\.md}, out, name)
+        assert_match(/CONVENTIONS\.md/, out, name)
       end
-      rules = Judgelint::Rule.load_dir(".judgelint/rules", default_threshold: 0.7)
-      assert_equal %w[ruby/no-silent-rescues ruby/error-messages-say-what-to-do], rules.map(&:id)
-      assert File.file?(".judgelint/examples/ruby/no-silent-rescues/fail/returns_nil.rb")
+      rules = Judgelint::Spec.discover(rules_dir: ".judgelint/rules", default_threshold: 0.7)
+      assert_equal %w[root/no-silent-rescues root/error-messages-say-what-to-do], rules.map(&:id)
+      assert_equal(%i[fail pass fail pass], rules.flat_map { |rule| rule.inline_examples.map(&:expected) })
+      assert_includes rules.first.inline_examples.last.code, 'logger.warn("profile #{id} timed out'
     end
   end
 

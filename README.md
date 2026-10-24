@@ -118,6 +118,33 @@ If the model misreads a bullet, describe breaking and following it:
 They make the model more decisive. A loose description can also flag code
 you meant to allow, so check them against examples.
 
+### Examples
+
+Show the model what breaking and following a rule looks like. Under a bullet,
+put code blocks after a `Bad:` or `Good:` line:
+
+````markdown
+- **Jobs take ids, not records.** Arguments to `perform_later` are ids and
+  plain values. A record can change or disappear before the job runs.
+
+  Bad:
+
+  ```ruby
+  WelcomeEmailJob.perform_later(user)
+  ```
+
+  Good:
+
+  ```ruby
+  WelcomeEmailJob.perform_later(user.id, locale: user.locale)
+  ```
+````
+
+The model reads them with the rest of the spec, and `judgelint test` checks
+that it gets each one right. [examples/conventions](examples/conventions) has
+complete specs for Ruby, TypeScript, Python, and Postgres migrations, with
+code to run them on.
+
 | Frontmatter | What it does |
 |---|---|
 | `paths`, `excludes` | Globs for the files the spec covers, relative to the project root. A README needs `paths`. |
@@ -165,21 +192,29 @@ with no reason, like "this is intentional", doesn't excuse anything.
 
 ## Testing rules
 
-`judgelint init` writes an example spec with examples to test it against.
-Test each rule against examples. Put files that follow it in
-`.judgelint/examples/<rule id>/pass/` and files that break it in `fail/`.
-`judgelint test` shows which ones the model gets wrong:
+`judgelint test` judges each rule's examples and shows which ones the model
+gets wrong:
 
 ```text
-lib/no-silent-rescues  9/10
-  ok   pass 0.03  .judgelint/examples/lib/no-silent-rescues/pass/logs_and_reraises.rb
-  MISS pass 0.79  .judgelint/examples/lib/no-silent-rescues/pass/retries_then_raises.rb
-  ok   fail 0.94  .judgelint/examples/lib/no-silent-rescues/fail/assigns_default.rb
+root/jobs-take-ids-not-records  2/2
+  ok   fail 1.00  CONVENTIONS.md:67
+  ok   pass 0.00  CONVENTIONS.md:73
+root/no-silent-rescues  2/3
+  ok   pass 0.03  .judgelint/examples/root/no-silent-rescues/pass/logs_and_reraises.rb
+  MISS pass 0.79  .judgelint/examples/root/no-silent-rescues/pass/retries_then_raises.rb
+  ok   fail 0.94  .judgelint/examples/root/no-silent-rescues/fail/assigns_default.rb
 ```
 
-When an example fails, reword the bullet or split it into narrower rules. The
+`Bad:` and `Good:` blocks in the spec are the quickest examples to write. The
+model also reads them during every check, so passing them shows it
+understands the rule, not that it gets the rule right on code it hasn't seen.
+For that, and for longer examples, put whole files that follow the rule in
+`.judgelint/examples/<rule id>/pass/` and files that break it in `fail/`. The
 model doesn't see the `pass/` or `fail/` part of the path. For a directory
 rule, each example is a directory.
+
+When an example fails, reword the bullet or split it into narrower rules.
+`judgelint init` writes a spec with examples to start from.
 
 ## CI
 

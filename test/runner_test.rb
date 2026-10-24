@@ -395,6 +395,39 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_bad_and_good_blocks_are_judged_like_example_files
+    in_project do
+      write("CONVENTIONS.md", <<~MARKDOWN)
+        - **No smells.**
+
+          Bad:
+
+          ```ruby
+          SMELL
+          ```
+
+          Good:
+
+          ```ruby
+          fine
+          ```
+      MARKDOWN
+      rule = Judgelint::Spec.discover(rules_dir: ".judgelint/rules", default_threshold: 0.7).first
+      client = FakeClient.new { |state, _question| state["file"].include?("SMELL") ? 0.9 : 0.1 }
+      runner = runner([rule], client)
+      examples = runner.execute(runner.plan_examples).flatten
+
+      assert_equal [["CONVENTIONS.md:6", :fail, true], ["CONVENTIONS.md:12", :pass, true]],
+                   examples.map { |example| [example.path, example.expected, example.correct?] }
+      assert_equal(%w[example.ruby example.ruby], client.calls.map { |state, _keys| state["file"][/Path: (\S+)/, 1] })
+
+      File.write("CONVENTIONS.md", File.read("CONVENTIONS.md").sub("Good:", "Bad:"))
+      rule = Judgelint::Spec.discover(rules_dir: ".judgelint/rules", default_threshold: 0.7).first
+      error = assert_raises(Judgelint::ConfigError) { runner([rule], client).plan_examples }
+      assert_match(%r{add a Good block under root/no-smells}, error.message)
+    end
+  end
+
   def test_every_rule_needs_pass_and_fail_examples_before_anything_is_sent
     in_project do
       write(".judgelint/rules/smell/fail/bad.rb", "SMELL")

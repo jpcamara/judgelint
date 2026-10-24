@@ -178,6 +178,52 @@ class SpecTest < Minitest::Test
     end
   end
 
+  def test_bad_and_good_blocks_under_a_bullet_are_examples
+    in_project do
+      write("CONVENTIONS.md", <<~MARKDOWN)
+        ---
+        severity: warning
+        ---
+        - **No silent rescues.** Log or re-raise.
+
+          Bad:
+
+          ```ruby
+          rescue StandardError
+            nil
+          ```
+
+          **Good:**
+
+          ```ruby
+          rescue Timeout => e
+            raise
+          ```
+
+          ```
+          rescue => e
+            log(e)
+          ```
+
+          The last one logs, so it's fine.
+
+        ```ruby
+        # Top-level code isn't an example.
+        ```
+
+        - Keep it short.
+      MARKDOWN
+      rescues, short = discover
+
+      assert_equal "No silent rescues. Log or re-raise.", rescues.convention, "labels and commentary stay out of the rule"
+      assert_equal [[:fail, 9, "example.ruby"], [:pass, 16, "example.ruby"], [:pass, 21, "example"]],
+                   rescues.inline_examples.map { |example| [example.expected, example.line, example.name] }
+      assert_equal "rescue StandardError\n  nil\n", rescues.inline_examples.first.code
+      assert_empty short.inline_examples
+      assert_includes rescues.prose, "rescue StandardError", "the model reads the examples with the spec"
+    end
+  end
+
   def test_ignore_keeps_files_out_of_a_check
     in_project do
       write("src/services/README.md", SERVICES)

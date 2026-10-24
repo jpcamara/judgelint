@@ -20,7 +20,7 @@ module Judgelint
                            and fail) and report what the model gets wrong.
         rules              List the rules and how many files each governs.
         providers          List the decision-model providers judgelint knows.
-        init               Write an example spec, with examples to test it against.
+        init               Write a CONVENTIONS.md to start from, with examples.
 
       Options:
             --base REF       Check only what changed since the merge base with REF,
@@ -225,7 +225,7 @@ module Judgelint
 
     def init
       Scaffold.write(".", @out)
-      @err.puts "Next: set TYPESAFE_API_KEY, then run `judgelint test` to see the example rule judged."
+      @err.puts "Next: set TYPESAFE_API_KEY, then run `judgelint test` to see the examples judged."
       0
     end
 

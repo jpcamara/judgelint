@@ -90,25 +90,29 @@ module Judgelint
 
     attr_reader :untested
 
-    # Files under <examples>/pass must not be judged violations, files under
-    # <examples>/fail must. The model sees each example's path relative to its
-    # pass/ or fail/ directory, so the directory never gives the answer away.
-    # A rule with examples needs both kinds, checked before anything is sent;
-    # rules with none are listed in +untested+.
+    # Files under <examples>/pass and Good blocks under a spec's bullet must
+    # not be judged violations; files under <examples>/fail and Bad blocks
+    # must. The model sees each file's path relative to its pass/ or fail/
+    # directory, and a block as example.<language>, so neither gives the
+    # answer away. A rule with examples needs both kinds, checked before
+    # anything is sent; rules with none are listed in +untested+.
     def plan_examples
       jobs = []
       missing = []
       @untested = []
       @rules.each do |rule|
         found = %i[pass fail].to_h { |expected| [expected, example_paths(rule, expected)] }
-        if found.values.all?(&:empty?)
+        inline = rule.directory? ? [] : rule.inline_examples
+        if found.values.all?(&:empty?) && inline.empty?
           @untested << rule
           next
         end
 
         found.each do |expected, paths|
           dir = File.join(rule.examples_dir, expected.to_s)
-          missing << "#{dir}/" if paths.empty?
+          if paths.empty? && inline.none? { |example| example.expected == expected }
+            missing << (inline.empty? ? "#{dir}/" : "a #{expected == :pass ? 'Good' : 'Bad'} block under #{rule.id}")
+          end
           paths.each do |path|
             shown = path.delete_prefix("#{dir}/")
             context = rule.context_files
@@ -117,8 +121,13 @@ module Judgelint
             jobs << plan_file(source, [rule], :all, expected: expected)
           end
         end
+        inline.each do |example|
+          source = Source.new("#{rule.source}:#{example.line}", shown_as: example.name, text: example.code,
+                                                                 context: rule.context_files)
+          jobs << plan_file(source, [rule], :all, expected: example.expected)
+        end
       end
-      raise ConfigError, "Examples need both kinds: add some to #{missing.join(', ')}" unless missing.empty?
+      raise ConfigError, "Examples need both kinds: add #{missing.join(', ')}" unless missing.empty?
 
       jobs
     end

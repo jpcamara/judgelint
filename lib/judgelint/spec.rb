@@ -39,6 +39,7 @@ module Judgelint
     COHORTS = { "by_file" => "file", "by_directory" => "directory" }.freeze
     BULLET = /\A(?:[-*+]|\d+[.)])\s+(\S.*)\z/
     CRITERION = /\A(violation|compliant):\s*(\S.*)\z/i
+    LABEL = /\A[*_]*(bad|good)[*_]*:?[*_]*\z/i
     LEAD = /\A\*\*(.+?)\*\*/
 
     # +readmes+ false looks in +rules_dir+ alone.
@@ -60,14 +61,14 @@ module Judgelint
 
     # A README without frontmatter, or without paths:, isn't a spec.
     def self.load(path, default_threshold:, required:)
-      text = File.read(path)
-      match = Rule::FRONTMATTER.match(text)
+      content = File.read(path)
+      match = Rule::FRONTMATTER.match(content)
       own = !required && File.basename(path) != "README.md"
       raise ConfigError, "#{path}: rules start with a --- frontmatter block" if match.nil? && required
       return [] if match.nil? && !own
 
       data = match ? Judgelint.parse_yaml(match[1], path) : {}
-      body = match ? match[2] : text
+      body = match ? match[2] : content
       return [Rule.new(data, source: path, body: body.strip, default_threshold: default_threshold)] if data.key?("question")
       return [] unless required || own || data.key?("paths")
 
@@ -81,19 +82,19 @@ module Judgelint
         excludes = shared["excludes"] || []
         shared["excludes"] = (excludes.is_a?(Array) ? excludes : [excludes]) + UNJUDGED
       end
-      found = bullets(body)
+      found = bullets(body, content[0, content.size - body.size].count("\n"))
       raise ConfigError, "#{path}: a rule needs a question, or bullets to turn into rules" if found.empty? && required
 
       prose = body.strip
       ids = []
-      found.map do |text, criteria|
+      found.map do |text, criteria, examples|
         id = unique("#{name(path)}/#{slug(text)}", ids)
         rule = shared.merge("id" => id, "convention" => plain(text), "message" => lead(text))
         rule["yes_means"] = plain(criteria["violation"]) if criteria["violation"]
         rule["no_means"] = plain(criteria["compliant"]) if criteria["compliant"]
         rule["severity"] = severity(text) unless data.key?("severity")
         Rule.new(rule, source: path, default_threshold: default_threshold, prose: prose,
-                       examples_dir: File.join(".judgelint", "examples", id))
+                       examples_dir: File.join(".judgelint", "examples", id), inline_examples: examples)
       end
     end
 
@@ -111,47 +112,86 @@ module Judgelint
     end
 
     # The top-level bullets of the body, outside code fences, as [text,
-    # criteria]: the text with its continuation lines and nested bullets, and
-    # any indented violation: or compliant: lines.
-    def self.bullets(body)
+    # criteria, examples]: the text with its continuation lines and nested
+    # bullets, any indented violation: or compliant: lines, and the code blocks
+    # under a "Bad:" or "Good:" line. +offset+ is the number of lines before
+    # the body, so an example's line number is the spec file's.
+    def self.bullets(body, offset = 0)
       found = []
       current = nil
       criteria = {}
       criterion = nil
+      examples = []
+      label = nil
       fenced = false
+      indent = 0
+      code = nil
+      language = ""
+      start = 0
+      number = offset
       body.each_line do |raw|
+        number += 1
         line = raw.chomp
         if line.lstrip.start_with?("```")
+          if fenced
+            examples << InlineExample.new(label, code.join, start, language) if code
+            code = nil
+          else
+            indent = line.size - line.lstrip.size
+            if current && label && indent.positive?
+              code = []
+              start = number + 1
+              language = line.strip.delete_prefix("```").split(" ").first.to_s
+            end
+          end
           fenced = !fenced
           next
         end
-        next if fenced
+        if fenced
+          code << deindent(raw, indent) if code
+          next
+        end
 
         bullet = BULLET.match(line)
         if bullet
-          found << [current, criteria] if current
+          found << [current, criteria, examples] if current
           current = bullet[1]
           criteria = {}
           criterion = nil
+          examples = []
+          label = nil
         elsif current && line.start_with?(" ", "\t") && !line.strip.empty?
           nested = BULLET.match(line.strip)
           text = nested ? nested[1] : line.strip
           named = CRITERION.match(text)
+          labeled = LABEL.match(text)
           if named
             criterion = named[1].downcase
             criteria[criterion] = named[2]
+          elsif labeled
+            label = labeled[1].downcase
+            criterion = nil
+          elsif label
+            # Commentary on the examples isn't part of the rule.
           elsif criterion
             criteria[criterion] = "#{criteria[criterion]} #{text}"
           else
             current = "#{current} #{text}"
           end
         elsif current && !line.strip.empty?
-          found << [current, criteria]
+          found << [current, criteria, examples]
           current = nil
         end
       end
-      found << [current, criteria] if current
+      found << [current, criteria, examples] if current
       found
+    end
+
+    # A code block's line without the indentation its fence had.
+    def self.deindent(raw, indent)
+      cut = 0
+      cut += 1 while cut < indent && [" ", "\t"].include?(raw[cut])
+      raw[cut..].to_s
     end
 
     # The bullet with its markdown emphasis removed: what the model is asked about.

@@ -31,7 +31,7 @@ module Judgelint
     KEYS = %w[id question convention yes_means no_means fail_when scope paths excludes context severity threshold message].freeze
 
     attr_reader :id, :question, :convention, :yes_means, :no_means, :fail_when, :scope, :paths, :excludes,
-                :context, :severity, :threshold, :message, :source, :examples_dir, :prose
+                :context, :severity, :threshold, :message, :source, :examples_dir, :prose, :inline_examples
 
     # The rules in +dir+ alone (Spec.discover also finds READMEs).
     def self.load_dir(dir, default_threshold:)
@@ -41,7 +41,8 @@ module Judgelint
     # A rule is a question asked exactly as written, or a convention (a
     # spec's bullet) asked whether the code breaks it.
     # +prose+ is a spec's body, which the model reads alongside the file.
-    def initialize(data, source:, body: "", default_threshold: 0.7, examples_dir: nil, prose: nil)
+    # +inline_examples+ are the Bad and Good code blocks under a spec's bullet.
+    def initialize(data, source:, body: "", default_threshold: 0.7, examples_dir: nil, prose: nil, inline_examples: [])
       unknown = data.keys - KEYS
       raise ConfigError, "#{source}: unknown keys #{unknown.join(', ')}" unless unknown.empty?
 
@@ -53,6 +54,7 @@ module Judgelint
 
       @examples_dir = examples_dir || source.delete_suffix(".md")
       @prose = prose
+      @inline_examples = inline_examples
       @yes_means = text(data["yes_means"])
       @no_means = text(data["no_means"])
       @fail_when = one_of("fail_when", yes_or_no(data.fetch("fail_when", "yes")), %w[yes no])
@@ -142,6 +144,24 @@ module Judgelint
     def first_paragraph(body)
       paragraph = body.split(/\n\s*\n/).map(&:strip).find { |part| !part.empty? && !part.start_with?("#") }
       paragraph&.gsub(/\s*\n\s*/, " ")
+    end
+  end
+
+  # A Bad or Good code block under a spec's bullet. `judgelint test` judges it
+  # like a file in the rule's fail/ or pass/ examples.
+  class InlineExample
+    attr_reader :expected, :code, :line, :language
+
+    def initialize(label, code, line, language)
+      @expected = label == "bad" ? :fail : :pass
+      @code = code
+      @line = line
+      @language = language
+    end
+
+    # The file name the model sees.
+    def name
+      language.empty? ? "example" : "example.#{language}"
     end
   end
 end
