@@ -10,8 +10,9 @@ module Judgelint
     HELP = <<~TEXT
       Usage: judgelint [command] [options] [paths...]
 
-      Checks code against the conventions in your specs. For each file and each
-      rule, it asks a decision model (Jev by default) whether the code breaks it.
+      Checks code against the conventions in your specs, like a CONVENTIONS.md
+      of bullets. For each file and each rule, it asks a decision model (Jev on
+      TypeSafe by default) whether the code breaks it.
 
       Commands:
         check [paths...]   Check the files the specs govern, or these (default).
@@ -19,7 +20,7 @@ module Judgelint
                            and fail) and report what the model gets wrong.
         rules              List the rules and how many files each governs.
         providers          List the decision-model providers judgelint knows.
-        init               Write .judgelint.yml and an example spec.
+        init               Write an example spec, with examples to test it against.
 
       Options:
             --base REF       Check only what changed since the merge base with REF,
@@ -71,7 +72,7 @@ module Judgelint
     rescue Error => e
       @err.puts "judgelint: #{e.message}"
       # Requests that succeeded before the failure are still billed.
-      @err.puts @usage.line if @usage && @usage.requests.positive?
+      @err.puts "#{@usage.line}, #{@models}" if @usage && @usage.requests.positive?
       2
     end
 
@@ -137,10 +138,11 @@ module Judgelint
       units = paths.size + directories.size
       runner = runner(config, rules)
       jobs = runner.plan(paths, directories: directories, changes: changes)
+      runner.check_keys(jobs)
       guard_cost(config, runner, jobs)
       verdicts = runner.execute(jobs).flatten
       Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: units, usage: @usage)
-      @err.puts @usage.line
+      @err.puts "#{@usage.line}, #{@models}"
       verdicts.any?(&:failing?) ? 1 : 0
     end
 
@@ -154,9 +156,9 @@ module Judgelint
       elsif changes
         paths = changes.keys.sort.select { |path| File.file?(path) }
       else
-        paths = Glob.expand(rules.flat_map(&:paths))
+        paths = Glob.files(rules.flat_map(&:paths))
       end
-      paths.select { |path| rules.any? { |rule| !rule.directory? && rule.applies_to?(path) } }
+      paths.select { |path| rules.any? { |rule| !rule.directory? && rule.applies_to?(path) } }.reject { |path| Glob.binary?(path) }
     end
 
     # The directories directory rules govern; with paths named, those the
@@ -184,10 +186,11 @@ module Judgelint
       raise ConfigError, "No rule has examples yet. Add some under #{rules.first.examples_dir}/{pass,fail}/" if jobs.empty?
 
       @err.puts "#{untested.size} #{untested.size == 1 ? 'rule has' : 'rules have'} no examples: #{untested.map(&:id).join(', ')}" unless untested.empty?
+      runner.check_keys(jobs)
       guard_cost(config, runner, jobs)
       examples = runner.execute(jobs).flatten
       Reporter.new(@out, format: @format).fixtures(examples, usage: @usage)
-      @err.puts @usage.line
+      @err.puts "#{@usage.line}, #{@models}"
       examples.all?(&:correct?) ? 0 : 1
     end
 
@@ -204,7 +207,7 @@ module Judgelint
     def list_rules
       _config, rules = load_rules
       rules.each do |rule|
-        count = rule.directory? ? "#{rule.directories.size} dirs" : "#{Glob.expand(rule.paths).count { |path| rule.applies_to?(path) }} files"
+        count = rule.directory? ? "#{rule.directories.size} dirs" : "#{Glob.files(rule.paths).count { |path| rule.applies_to?(path) }} files"
         @out.puts format("%-24s %-8s %10s  %s", rule.id, rule.severity, count, rule.question || rule.message)
       end
       0
@@ -233,6 +236,7 @@ module Judgelint
 
     def runner(config, rules)
       @usage = Usage.new
+      @models = config.label
       clients = config.models.map { |endpoint| Client.new(endpoint, usage: @usage) }
       Runner.new(config: config, rules: rules, clients: clients, cache: Cache.new(@no_cache ? nil : Config::CACHE))
     end

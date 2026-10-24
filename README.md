@@ -22,13 +22,38 @@ plain Ruby on Windows.
 
 ## Getting started
 
+Write your conventions as bullets in a `CONVENTIONS.md`:
+
+```markdown
+- **No silent rescues.** A rescue logs the error, re-raises it, or returns a
+  failure the caller sees.
+- **Error messages say what to do next.** A raised error names what was wrong
+  and what would work instead.
+```
+
+Then set your TypeSafe API key and run it:
+
 ```sh
-judgelint init            # writes .judgelint.yml and an example spec
 export TYPESAFE_API_KEY=...
-judgelint test            # checks the example spec against its examples
-judgelint                 # checks every file a spec covers
+judgelint                 # checks every file
 judgelint --base main     # checks only what changed since main
 ```
+
+```text
+lib/profile.rb
+  x error      root/no-silent-rescues              5       0.99  No silent rescues.
+  x error      root/error-messages-say-what-to-do  9       0.97  Error messages say what to do next.
+
+1 file, 2 violations
+judgelint: 1 request, 940 input tokens, $0.0000, typesafe:jev-latest
+```
+
+That's all the setup there is. A `CONVENTIONS.md` covers the files in its
+directory and below, except Markdown and lockfiles. In a git repository,
+judgelint skips what git ignores. It also skips binary files.
+
+judgelint asks Jev on TypeSafe. To use another provider, set `models` in
+`.judgelint.yml` (see [Configuration](#configuration)).
 
 Here's a run on the [demo app](examples/scoop-society), with the messages shortened:
 
@@ -47,7 +72,7 @@ src/features/flavor-of-day
   x error      src/features/no-orphaned-files                            old-rotation.ts 0.79  No orphaned files.
 
 2 files, 6 violations, 3 uncertain
-judgelint: 2 requests, 6,437 input tokens, $0.0003
+judgelint: 2 requests, 6,437 input tokens, $0.0003, typesafe:jev-latest
 ```
 
 A finding names the line that breaks the rule, or the file in a directory,
@@ -59,8 +84,10 @@ error. Config problems are caught before any request is sent.
 
 ## Writing specs
 
-A spec is a README, or any file ending in `.judgelint.md`, with `paths:` in
-its frontmatter. Each top-level bullet is a rule.
+A spec is a `CONVENTIONS.md`, a file ending in `.judgelint.md`, or a README
+with `paths:` in its frontmatter. Each top-level bullet is a rule. Put a spec
+in a subdirectory for conventions that apply only there, or use `paths:` to
+choose the files:
 
 ```markdown
 ---
@@ -76,7 +103,7 @@ excludes: ["src/services/legacy-import.ts"]
 
 The model gets the spec and the numbered file. For each bullet, it chooses
 whether the code breaks it, follows it, or isn't covered by it, and which line
-breaks it most clearly. A rule's id comes from the start of its bullet, like
+breaks it most clearly. A rule's id comes from the spec's directory and the start of its bullet, like
 `src/services/no-i-o-except-through-the`. Bullets that say "should" or
 "prefer" are warnings, and the rest are errors.
 
@@ -93,7 +120,7 @@ you meant to allow, so check them against examples.
 
 | Frontmatter | What it does |
 |---|---|
-| `paths`, `excludes` | Globs for the files the spec covers, relative to the project root. |
+| `paths`, `excludes` | Globs for the files the spec covers, relative to the project root. A README needs `paths`. |
 | `context` | Files the model reads along with each file, like shared types. They're never judged. |
 | `scope` | `window`, the default, asks about every 40 lines so findings have line numbers. `file` asks once per file. `directory` asks once per directory, shows the model every file in it, and names the file that breaks the rule. |
 | `severity`, `threshold` | Set the severity or threshold for every rule in the spec. |
@@ -138,6 +165,7 @@ with no reason, like "this is intentional", doesn't excuse anything.
 
 ## Testing rules
 
+`judgelint init` writes an example spec with examples to test it against.
 Test each rule against examples. Put files that follow it in
 `.judgelint/examples/<rule id>/pass/` and files that break it in `fail/`.
 `judgelint test` shows which ones the model gets wrong:
@@ -169,7 +197,7 @@ merge base.
 
 ## Configuration
 
-`.judgelint.yml` has four settings:
+judgelint runs without a config file. `.judgelint.yml` has four settings:
 
 ```yaml
 models: [typesafe]       # provider or provider:model; list two to average them

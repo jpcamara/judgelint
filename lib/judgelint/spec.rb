@@ -1,9 +1,13 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # Finds rules where a team already writes its conventions: a README (or any
-  # *.judgelint.md) whose frontmatter says which files it governs, with one
-  # convention per top-level bullet, as praxis reads them.
+  # Finds rules where a team already writes its conventions: a
+  # CONVENTIONS.md or *.judgelint.md, or a README whose frontmatter says which
+  # files it governs, with one convention per top-level bullet.
+  #
+  # A CONVENTIONS.md or *.judgelint.md needs no frontmatter. Without paths:,
+  # it governs the files under its own directory, except Markdown and
+  # lockfiles. A README is a spec only when it has paths:.
   #
   #   ---
   #   paths: ["src/services/*.ts"]
@@ -28,7 +32,9 @@ module Judgelint
   # Files in .judgelint/rules/ work the same way, and one there with a
   # question: in its frontmatter is a single rule asked exactly that way.
   module Spec
-    PATTERNS = ["**/README.md", "**/*.judgelint.md"].freeze
+    PATTERNS = ["**/README.md", "**/CONVENTIONS.md", "**/*.judgelint.md"].freeze
+    # What a spec without paths: leaves out of its directory.
+    UNJUDGED = ["**/*.md", "**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml"].freeze
     KEYS = %w[paths excludes context scope cohort type severity threshold].freeze
     COHORTS = { "by_file" => "file", "by_directory" => "directory" }.freeze
     BULLET = /\A(?:[-*+]|\d+[.)])\s+(\S.*)\z/
@@ -41,10 +47,10 @@ module Judgelint
       found = Dir.glob(File.join(rules_dir, "*.md")).sort.flat_map do |path|
         load(path.dup, default_threshold: default_threshold, required: true)
       end
-      specs = readmes ? Glob.expand(PATTERNS) : []
+      specs = readmes ? Glob.files(PATTERNS) : []
       specs = specs.reject { |path| path.start_with?("#{rules_dir}/") || Glob.match_any?(ignore, path) }
       found += specs.flat_map { |path| load(path.dup, default_threshold: default_threshold, required: false) }
-      raise ConfigError, "No rules: add a README with paths: frontmatter, or run `judgelint init`" if found.empty?
+      raise ConfigError, "No rules: write your conventions as bullets in CONVENTIONS.md, or run `judgelint init`" if found.empty?
 
       found.group_by(&:question_key).each_value do |same|
         raise ConfigError, "Rule ids collide: #{same.map(&:id).join(', ')}" if same.size > 1
@@ -54,22 +60,27 @@ module Judgelint
 
     # A README without frontmatter, or without paths:, isn't a spec.
     def self.load(path, default_threshold:, required:)
-      match = Rule::FRONTMATTER.match(File.read(path))
-      unless match
-        raise ConfigError, "#{path}: rules start with a --- frontmatter block" if required
+      text = File.read(path)
+      match = Rule::FRONTMATTER.match(text)
+      own = !required && File.basename(path) != "README.md"
+      raise ConfigError, "#{path}: rules start with a --- frontmatter block" if match.nil? && required
+      return [] if match.nil? && !own
 
-        return []
-      end
-
-      data = Judgelint.parse_yaml(match[1], path)
-      body = match[2]
+      data = match ? Judgelint.parse_yaml(match[1], path) : {}
+      body = match ? match[2] : text
       return [Rule.new(data, source: path, body: body.strip, default_threshold: default_threshold)] if data.key?("question")
-      return [] unless required || data.key?("paths")
+      return [] unless required || own || data.key?("paths")
 
       unknown = data.keys - KEYS
       raise ConfigError, "#{path}: unknown keys #{unknown.join(', ')}" unless unknown.empty?
 
       shared = shared_settings(path, data)
+      unless shared.key?("paths") || required
+        dir = File.dirname(path)
+        shared["paths"] = [dir == "." ? "**/*" : "#{dir}/**/*"]
+        excludes = shared["excludes"] || []
+        shared["excludes"] = (excludes.is_a?(Array) ? excludes : [excludes]) + UNJUDGED
+      end
       found = bullets(body)
       raise ConfigError, "#{path}: a rule needs a question, or bullets to turn into rules" if found.empty? && required
 
@@ -175,7 +186,7 @@ module Judgelint
     # Spec names: a README's directory, a *.judgelint.md's stem, or a rules file's name.
     def self.name(path)
       dir = File.dirname(path)
-      return(dir == "." ? "root" : dir) if File.basename(path) == "README.md"
+      return(dir == "." ? "root" : dir) if %w[README.md CONVENTIONS.md].include?(File.basename(path))
 
       File.basename(path).delete_suffix(".md").delete_suffix(".judgelint")
     end

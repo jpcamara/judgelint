@@ -86,6 +86,11 @@ module Judgelint
       end
     end
 
+    # Called before the first request, so a run the cache answers needs no key.
+    def check_key
+      raise ConfigError, "Set #{@endpoint.api_key_env} to your #{@endpoint.provider} API key" if key_missing?
+    end
+
     private
 
     def check_settings
@@ -94,7 +99,6 @@ module Judgelint
         raise ConfigError, "Provider #{provider} needs #{@endpoint.needs || 'api_base'} in .judgelint.yml"
       end
       raise ConfigError, "Provider #{provider} needs a model in .judgelint.yml" if model_needed?
-      raise ConfigError, "Set #{@endpoint.api_key_env} to your #{provider} API key" if key_missing?
 
       unless %w[bearer basic none].include?(@endpoint.auth) || @endpoint.auth.start_with?("header:")
         raise ConfigError, "auth is bearer, basic, none, or header:<name>, not #{@endpoint.auth}"

@@ -358,6 +358,25 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_a_conventions_file_is_enough
+    in_project do
+      write("CONVENTIONS.md", "- **No smells.** Code never smells.\n")
+      write(".gitignore", "node_modules/\n")
+      write("app/bad.rb", "SMELL\n")
+      write("node_modules/pkg/bad.js", "SMELL\n")
+      write("NOTES.md", "SMELL\n")
+      File.binwrite("logo.png", "\x89PNG\0SMELL")
+      git("init", "-q")
+      runners.each do |name, run|
+        status, out, = run.call([])
+
+        assert_equal 1, status, name
+        assert_match(%r{^app/bad\.rb\n  x error\s+root/no-smells\s+1\s+0\.90  No smells\.$}, out, name)
+        assert_match(/^1 file, 1 violations$/, out, name)
+      end
+    end
+  end
+
   def test_init_writes_a_working_example
     in_project do
       runners.each do |name, run|
@@ -392,6 +411,23 @@ class CLITest < Minitest::Test
       assert_equal 2, Judgelint::CLI.new(["app/bad.rb"], out: out, err: err).run
       assert_match(/Set JUDGELINT_UNSET_KEY/, err.string)
       assert_empty @server.requests
+    end
+  end
+
+  def test_cached_answers_need_no_api_key
+    in_smelly_project do
+      write(".judgelint.yml", "models: [{provider: typesafe, api_base: \"#{@server.base}\", api_key_env: JUDGELINT_LATER_KEY}]\n")
+      ENV["JUDGELINT_LATER_KEY"] = "secret"
+      assert_equal 1, Judgelint::CLI.new(["app/bad.rb"], out: StringIO.new, err: StringIO.new).run
+      ENV.delete("JUDGELINT_LATER_KEY")
+      out = StringIO.new
+      err = StringIO.new
+
+      assert_equal 1, Judgelint::CLI.new(["app/bad.rb"], out: out, err: err).run, err.string
+      assert_match(/1 violations/, out.string)
+      assert_equal 1, @server.requests.size, "the second run is answered from the cache"
+    ensure
+      ENV.delete("JUDGELINT_LATER_KEY")
     end
   end
 

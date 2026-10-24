@@ -17,11 +17,34 @@ module Judgelint
       patterns.flat_map { |pattern| Dir.glob(pattern) }.select { |path| File.file?(path) }.uniq.sort
     end
 
+    # The files to check: in a git repository, those git tracks or would add,
+    # so nothing it ignores (node_modules, build output) is ever read.
+    # Elsewhere, every file the patterns match.
+    def self.files(patterns)
+      listed = project_files
+      return expand(patterns) if listed.nil?
+
+      listed.select { |path| match_any?(patterns, path) && File.file?(path) }
+    end
+
+    # nil outside a git repository, or without git.
+    def self.project_files
+      out, _err, status = Open3.capture3("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+      status.success? ? out.split("\0").uniq.sort : nil
+    rescue SystemCallError
+      nil
+    end
+
+    # A NUL byte in the first 8 KB, as git decides.
+    def self.binary?(path)
+      File.open(path, "rb") { |file| file.read(8000).to_s.include?("\0") }
+    end
+
     # Files named on the command line, with directories expanded.
     def self.expand_arguments(arguments)
       arguments.flat_map do |argument|
         if File.directory?(argument)
-          expand([File.join(argument, "**", "*")])
+          files([File.join(argument, "**", "*").delete_prefix("./")])
         else
           [argument]
         end

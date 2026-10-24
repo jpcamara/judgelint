@@ -156,6 +156,28 @@ class SpecTest < Minitest::Test
     end
   end
 
+  def test_conventions_md_needs_no_frontmatter
+    in_project do
+      write("CONVENTIONS.md", "# How we write code\n\n- **No silent rescues.** Log or re-raise.\n")
+      write("src/api/CONVENTIONS.md", "---\nexcludes: [\"src/api/generated/**\"]\n---\n- Handlers should stay short.\n")
+      write("src/README.md", "- **Not a rule.** A README needs paths: to be a spec.\n")
+      root, api = discover
+
+      assert_equal "root/no-silent-rescues", root.id
+      assert_equal ["**/*"], root.paths
+      assert root.applies_to?("lib/a.rb")
+      refute root.applies_to?("docs/guide.md"), "Markdown is documentation, not code"
+      refute root.applies_to?("Gemfile.lock")
+      assert_includes root.prose, "# How we write code"
+
+      assert_equal "src/api/handlers-should-stay-short", api.id
+      assert_equal "warning", api.severity
+      assert api.applies_to?("src/api/users.ts")
+      refute api.applies_to?("src/web/users.ts"), "a spec covers its own directory"
+      refute api.applies_to?("src/api/generated/client.ts")
+    end
+  end
+
   def test_ignore_keeps_files_out_of_a_check
     in_project do
       write("src/services/README.md", SERVICES)

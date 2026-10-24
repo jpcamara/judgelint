@@ -222,7 +222,7 @@ class ClientTest < Minitest::Test
   end
 
   def test_a_missing_api_key_fails_before_any_request
-    error = assert_raises(Judgelint::ConfigError) { client(api_key_env: "JUDGELINT_UNSET_KEY") }
+    error = assert_raises(Judgelint::ConfigError) { client(api_key_env: "JUDGELINT_UNSET_KEY").check_key }
     assert_match(/Set JUDGELINT_UNSET_KEY/, error.message)
   end
 

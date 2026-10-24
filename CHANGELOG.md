@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- No setup beyond `TYPESAFE_API_KEY`. A `CONVENTIONS.md` of bullets is a
+  spec with no frontmatter, and it covers the files in its directory and
+  below, except Markdown and lockfiles. A README still needs `paths:`.
+- The cost line names the model.
+- Full runs skip files git ignores, and binary files.
+- `judgelint init` no longer writes `.judgelint.yml`.
+- A run the cache answers in full needs no API key.
+
 ## 0.1.2 (2026-10-24)
 
 - Each bullet is one choice between breaking the rule, following it, and the

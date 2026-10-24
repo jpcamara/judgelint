@@ -3,14 +3,6 @@
 module Judgelint
   # Files written by `judgelint init`.
   module Scaffold
-    CONFIG = <<~YAML
-      # judgelint settings. See https://github.com/jpcamara/judgelint#configuration
-      models: [typesafe]        # `judgelint providers` lists the others; list two to average them
-      # threshold: 0.7
-      # ignore: ["vendor/**"]
-      # max_cost_usd: 1.00
-    YAML
-
     # A spec: each bullet is a convention judgelint checks. A README with
     # paths: frontmatter works the same way, next to the code it governs.
     SPEC = <<~MARKDOWN
@@ -47,7 +39,6 @@ module Judgelint
     def self.write(root, out)
       examples = ".judgelint/examples/ruby/no-silent-rescues"
       files = {
-        Config::FILE => CONFIG,
         ".judgelint/rules/ruby.md" => SPEC,
         File.join(examples, "pass", "logs_and_reraises.rb") => PASS_EXAMPLE,
         File.join(examples, "fail", "returns_nil.rb") => FAIL_EXAMPLE

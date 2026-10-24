@@ -123,6 +123,11 @@ module Judgelint
       jobs
     end
 
+    # Every model the jobs will ask needs its key.
+    def check_keys(jobs)
+      jobs.flat_map { |job| job.requests.map(&:model) }.uniq.each { |model| @clients[model].check_key }
+    end
+
     def request_count(jobs)
       jobs.sum { |job| job.requests.size }
     end

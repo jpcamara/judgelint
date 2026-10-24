@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
 module Judgelint
-  # .judgelint.yml: which models to ask, the threshold, files to ignore, and a
-  # spending limit. Everything else has a fixed value.
+  # .judgelint.yml, which is optional: which models to ask, the threshold,
+  # files to ignore, and a spending limit. Everything else has a fixed value.
   #
   #   models: [typesafe, cloudflare:clef]   # ask both and average
   #   threshold: 0.7
