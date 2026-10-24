@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-10-24)
 
 - No setup beyond `TYPESAFE_API_KEY`. A `CONVENTIONS.md` of bullets is a
   spec with no frontmatter, and it covers the files in its directory and
