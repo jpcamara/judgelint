@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 (2026-10-23)
+
+- `judgehint:` comments replace `judgelint:disable`. A hint says why the code
+  is the way it is; each rule asks whether it gives a reason the code may
+  break that rule, and reports the finding as excused if so.
+- Native binaries for macOS and Linux on each GitHub release, installable
+  with Homebrew (`brew install jpcamara/tap/judgelint`) or `install.sh`.
+
 ## 0.1.0 (2026-10-23)
 
 - Specs as praxis reads them: a README (or `*.judgelint.md`) with `paths:`
