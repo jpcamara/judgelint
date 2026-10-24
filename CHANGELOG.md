@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.2 (2026-10-24)
+
+- Each bullet is one choice between breaking the rule, following it, and the
+  rule not applying, in place of two yes/no questions. On the demo app, Jev
+  finds 13 of 14 known violations, up from 12, with half the questions.
+- Findings name the line that breaks the rule, or the file in a directory,
+  when the model is sure of one.
+- Both the System One and OpenAI Decisions protocols send choice questions.
+
 ## 0.1.1 (2026-10-23)
 
 - `judgehint:` comments replace `judgelint:disable`. A hint explains why code

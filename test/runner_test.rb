@@ -194,19 +194,54 @@ class RunnerTest < Minitest::Test
     end
   end
 
-  def test_a_bullet_is_asked_both_ways_with_the_specs_prose
+  def test_a_bullet_is_a_choice_with_the_specs_prose_and_names_its_line
     in_project do
-      write("app/a.rb", "x\n")
+      write("app/a.rb", "x\ny\nz\n")
       rule = Judgelint::Rule.new({ "convention" => "No smells.", "paths" => ["app/**/*.rb"] },
                                  source: "app/README.md", prose: "# Conventions\n\n- No smells.")
-      client = FakeClient.new { |_state, question| question.key.end_with?(".breaks") ? 0.6 : 0.2 }
+      client = FakeClient.new do |_state, question|
+        question.where? ? { "L1" => 0.1, "L2" => 0.8, "L3" => 0.1 } : { "breaks" => 0.8, "follows" => 0.2, "not_applicable" => 0.0 }
+      end
       verdict = judge([rule], client, ["app/a.rb"]).first
 
       state, keys = client.calls.first
-      assert_equal %w[README.1-1.breaks README.1-1.follows], keys
-      assert_equal({ "team_rules" => "# Conventions\n\n- No smells.", "file" => "Path: app/a.rb\n\n1: x\n" }, state)
-      assert_in_delta 0.7, verdict.probability, 0.001, "breaks 0.6 and follows 0.2 (so breaks 0.8), averaged"
-      assert_equal :violation, verdict.status
+      assert_equal %w[README.1-3 README.1-3.where], keys
+      assert_equal({ "team_rules" => "# Conventions\n\n- No smells.", "file" => "Path: app/a.rb\n\n1: x\n2: y\n3: z\n" }, state)
+      assert_equal [:violation, 0.8, [1, 3], 2], [verdict.status, verdict.probability, verdict.lines, verdict.line]
+    end
+  end
+
+  def test_a_finding_names_a_line_only_when_the_models_agree_on_one
+    in_project do
+      write("app/a.rb", "x\ny\nz\n")
+      rule = Judgelint::Rule.new({ "convention" => "No smells.", "paths" => ["app/**/*.rb"] }, source: "app/README.md")
+      spread = { "L1" => 0.45, "L2" => 0.55, "L3" => 0.0 }
+      client = FakeClient.new { |_state, question| question.where? ? spread : 0.9 }
+      assert_equal 2, judge([rule], client, ["app/a.rb"]).first.line
+
+      spread = { "L1" => 0.4, "L2" => 0.35, "L3" => 0.25 }
+      verdict = judge([rule], FakeClient.new { |_state, question| question.where? ? spread : 0.9 }, ["app/a.rb"]).first
+      assert_nil verdict.line, "no line has half"
+      assert_equal [1, 3], verdict.lines
+    end
+  end
+
+  def test_a_directory_finding_names_its_file
+    in_project do
+      write("app/feature/index.rb", "x\n")
+      write("app/feature/stray.rb", "y\n")
+      rule = Judgelint::Rule.new({ "convention" => "Every file is used.", "paths" => ["app/*"], "scope" => "directory" },
+                                 source: "app/README.md")
+      offered = nil
+      client = FakeClient.new do |_state, question|
+        offered = question.places if question.where?
+        question.where? ? { "app/feature/index.rb" => 0.1, "app/feature/stray.rb" => 0.9 } : 0.9
+      end
+      runner = runner([rule], client)
+      verdict = runner.execute(runner.plan([], directories: ["app/feature"])).flatten.first
+
+      assert_equal %w[app/feature/index.rb app/feature/stray.rb], offered
+      assert_equal ["app/feature/stray.rb", nil], [verdict.file, verdict.line]
     end
   end
 

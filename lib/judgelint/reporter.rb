@@ -46,21 +46,27 @@ module Judgelint
     def text(verdicts, file_count)
       shown = verdicts.reject { |verdict| verdict.status == :pass }
       width = shown.map { |verdict| verdict.rule.id.size }.max
+      places = [7, *shown.map { |verdict| range(verdict).size }].max
       shown.group_by(&:path).each do |path, group|
         @out.puts path
-        group.each { |verdict| @out.puts "  #{line(verdict, width)}" }
+        group.each { |verdict| @out.puts "  #{line(verdict, width, places)}" }
       end
       @out.puts "" unless shown.empty?
       @out.puts summary(verdicts, file_count)
     end
 
-    def line(verdict, width)
+    def line(verdict, width, places)
       label = verdict.status == :violation ? verdict.rule.severity : verdict.status.to_s
-      format("%s %-10s %-#{width}s  %-7s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
+      format("%s %-10s %-#{width}s  %-#{places}s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
              range(verdict), probability(verdict), verdict.rule.message)
     end
 
+    # The line that breaks the rule, or the range asked about; for a
+    # directory, the file in it.
     def range(verdict)
+      return verdict.file.delete_prefix("#{verdict.path}/") if verdict.file
+      return verdict.line.to_s if verdict.line
+
       verdict.lines ? verdict.lines.join("-") : ""
     end
 
@@ -107,8 +113,12 @@ module Judgelint
       level = { violation: verdict.rule.error? ? "error" : "warning", uncertain: "notice" }[verdict.status]
       return unless level
 
-      properties = ["file=#{escape(verdict.path, true)}"]
-      properties += ["line=#{verdict.lines[0]}", "endLine=#{verdict.lines[1]}"] if verdict.lines
+      properties = ["file=#{escape(verdict.file || verdict.path, true)}"]
+      if verdict.line
+        properties << "line=#{verdict.line}"
+      elsif verdict.lines
+        properties += ["line=#{verdict.lines[0]}", "endLine=#{verdict.lines[1]}"]
+      end
       properties << "title=#{escape("judgelint #{verdict.rule.id}", true)}"
       @out.puts "::#{level} #{properties.join(',')}::#{escape("#{verdict.rule.message} (#{probability(verdict)})", false)}"
     end
@@ -135,12 +145,16 @@ module Judgelint
     end
 
     def sarif_result(verdict)
-      region = verdict.lines ? { "startLine" => verdict.lines[0], "endLine" => verdict.lines[1] } : {}
+      region =
+        if verdict.line then { "startLine" => verdict.line }
+        elsif verdict.lines then { "startLine" => verdict.lines[0], "endLine" => verdict.lines[1] }
+        else {}
+        end
       level = verdict.status == :uncertain ? "note" : (verdict.rule.error? ? "error" : "warning")
       {
         "ruleId" => verdict.rule.id, "level" => level,
         "message" => { "text" => "#{verdict.rule.message} (#{probability(verdict)})" },
-        "locations" => [{ "physicalLocation" => { "artifactLocation" => { "uri" => verdict.path }, "region" => region } }]
+        "locations" => [{ "physicalLocation" => { "artifactLocation" => { "uri" => verdict.file || verdict.path }, "region" => region } }]
       }
     end
   end

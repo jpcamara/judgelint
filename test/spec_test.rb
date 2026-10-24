@@ -116,22 +116,20 @@ class SpecTest < Minitest::Test
     end
   end
 
-  def test_a_convention_is_asked_both_ways
+  def test_a_convention_is_a_choice_and_asks_where
     rule = Judgelint::Rule.new({ "convention" => "No fetch outside the Store." }, source: "README.md")
-    breaks = Judgelint::Question.new(rule, 41, 80)
-    follows = Judgelint::Question.new(rule, 41, 80, inverted: true)
+    verdict = Judgelint::Question.new(rule, 41, 80)
+    where = Judgelint::Question.new(rule, 41, 80, kind: :where, places: %w[L41 L42])
 
-    assert_equal "README.41-80.breaks", breaks.key
-    assert_equal "Do lines 41-80 of the file clearly violate the following team rule? Answer true only when the " \
-                 "code breaks the rule, not when the rule does not apply to it. Rule: No fetch outside the Store.",
-                 breaks.instructions
-    assert_equal ["The code clearly breaks the rule.", "The code follows the rule, or the rule doesn't apply to it."],
-                 [breaks.yes_means, breaks.no_means]
-    assert_equal "Do lines 41-80 of the file follow the following team rule, or does it not apply to them? Answer " \
-                 "false only when those lines clearly break it. Rule: No fetch outside the Store.", follows.instructions
-    assert_equal [breaks.no_means, breaks.yes_means], [follows.yes_means, follows.no_means]
-    assert_in_delta 0.8, breaks.violation(0.8)
-    assert_in_delta 0.2, follows.violation(0.8), 0.001, "yes to \"does it follow\" is no to \"does it break\""
+    assert_equal ["README.41-80", "README.41-80.where"], [verdict.key, where.key]
+    assert_equal "How do lines 41-80 of the file relate to the following team rule? Rule: No fetch outside the Store.",
+                 verdict.instructions
+    assert_equal({ "breaks" => "The code clearly breaks the rule.", "follows" => "The code follows the rule.",
+                   "not_applicable" => "The rule doesn't apply to this code." }, verdict.options)
+    assert_in_delta 0.8, verdict.violation({ "breaks" => 0.8, "follows" => 0.1, "not_applicable" => 0.1 })
+    assert_equal "Which line, given by its number as L<number>, most clearly breaks the following team rule? " \
+                 "Rule: No fetch outside the Store.", where.instructions
+    assert_equal({ "L41" => nil, "L42" => nil }, where.options)
   end
 
   def test_violation_and_compliant_lines_are_the_criteria
@@ -151,10 +149,8 @@ class SpecTest < Minitest::Test
       assert_equal "No I/O except through the injected Store. No timers, no fetch.", io.convention
       assert_equal "calls fetch, console, or a timer directly, outside the Store", io.yes_means
       assert_equal "reads and writes only through the Store it's given", io.no_means
-      breaks = Judgelint::Question.new(io, 1, 40)
-      follows = Judgelint::Question.new(io, 1, 40, inverted: true)
-      assert_equal [io.yes_means, io.no_means], [breaks.yes_means, breaks.no_means]
-      assert_equal [io.no_means, io.yes_means], [follows.yes_means, follows.no_means]
+      options = Judgelint::Question.new(io, 1, 40).options
+      assert_equal [io.yes_means, io.no_means], options.values_at("breaks", "follows")
       assert_nil short.yes_means
       assert_includes io.prose, "violation: calls fetch", "the model reads the whole spec, criteria included"
     end

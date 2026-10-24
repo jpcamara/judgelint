@@ -89,8 +89,11 @@ task :example do
     spec = JSON.parse(File.read("expected.json"))
     pairs = ->(list) { list.map { |violation| [violation["path"], violation["rule"]] } }
     expected = (pairs.call(spec["violations"]) - pairs.call(spec["missed"])).sort
-    abort "Missed: #{(expected - found).inspect}\nExtra: #{(found - expected).inspect}" unless found == expected
-    puts "All #{expected.size} expected violations found (#{spec['missed'].size} known misses), and nothing else."
+    arguable = pairs.call(spec["arguable"])
+    extra = found - expected - arguable
+    abort "Missed: #{(expected - found).inspect}\nExtra: #{extra.inspect}" unless (expected - found).empty? && extra.empty?
+    puts "All #{expected.size} expected violations found (#{spec['missed'].size} known misses), " \
+         "#{(found & arguable).size} of #{arguable.size} arguable ones, and nothing else."
   end
 end
 

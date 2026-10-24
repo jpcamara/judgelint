@@ -59,12 +59,29 @@ class StubSystemOne
     yes = state.to_s.include?("SMELL") ? 0.9 : 0.1
     usage = { "input_tokens" => 10, "output_tokens" => 0 }
     if payload.key?("input")
-      answers = payload["questions"].map { |q| { "type" => "predicate", "name" => q["name"], "probability" => yes } }
+      answers = payload["questions"].map do |q|
+        next { "type" => "predicate", "name" => q["name"], "probability" => yes } unless q["type"] == "choice"
+
+        spread = self.class.spread(q["choices"].map { |choice| choice["value"] }, yes)
+        { "type" => "choice", "name" => q["name"], "probabilities" => spread.map { |value, p| { "value" => value, "probability" => p } } }
+      end
       return { "model" => payload["model"], "answers" => answers, "usage" => usage }
     end
 
-    answers = payload["questions"].keys.to_h { |key| [key, { "type" => "noul", "noul" => yes }] }
+    answers = payload["questions"].to_h do |key, q|
+      next [key, { "type" => "noul", "noul" => yes }] unless q["type"] == "choice"
+
+      [key, { "type" => "choice", "probabilities" => self.class.spread(q["criteria"].keys, yes) }]
+    end
     { "model" => "#{payload['model']}-stub", "usage" => usage, "answers" => answers }
+  end
+
+  # A choice's answer for a yes probability: "breaks" gets it, or, for a
+  # "where" question, the first option gets everything.
+  def self.spread(options, yes)
+    return options.to_h { |option| [option, option == options.first ? 1.0 : 0.0] } unless options.include?("breaks")
+
+    { "breaks" => yes, "follows" => 1.0 - yes, "not_applicable" => 0.0 }
   end
 end
 
@@ -82,9 +99,15 @@ class FakeClient
                                           .merge(limits.transform_keys(&:to_s)))
   end
 
+  # The block answers with a yes probability, which a choice question turns
+  # into its distribution, or with the distribution itself.
   def judge(state, questions)
     @lock.synchronize { @calls << [state, questions.map(&:key)] }
-    questions.to_h { |question| [question.key, @answer.call(state, question)] }
+    questions.to_h do |question|
+      answer = @answer.call(state, question)
+      answer = StubSystemOne.spread(question.options.keys, answer) if question.choice? && answer.is_a?(Numeric)
+      [question.key, answer]
+    end
   end
 
   def tokens(state, questions)

@@ -75,13 +75,20 @@
   "missed": [
     {
       "path": "src/features/flavor-of-day",
-      "rule": "src/features/no-orphaned-files",
-      "note": "Scores about 0.6 (uncertain). The bullet defines orphans as files unreachable from index.ts, and this feature has no index.ts; that takes more reasoning than a decision model does."
+      "rule": "src/features/one-capability-per-feature",
+      "note": "Scores about 0.25. old-rotation.ts is the feature's earlier rotation, so whether it's a second capability is arguable."
+    }
+  ],
+  "arguable": [
+    {
+      "path": "src/services/parlor.ts",
+      "rule": "src/services/services-do-one-thing",
+      "note": "parlor.ts both ranks and formats parlors. Scores 0.68 to 0.74."
     },
     {
-      "path": "src/features/flavor-of-day",
-      "rule": "src/features/one-capability-per-feature",
-      "note": "Scores about 0.2. old-rotation.ts is the feature's earlier rotation, so whether it's a second capability is arguable."
+      "path": "src/services/notify-parlor.ts",
+      "rule": "src/services/every-service-has-a-doc-comment",
+      "note": "The doc comment lists one failure mode, but the fetch can fail in ways it doesn't list. Scores 0.6 to 0.7."
     }
   ]
 }

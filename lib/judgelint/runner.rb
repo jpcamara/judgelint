@@ -43,6 +43,25 @@ module Judgelint
       end
     end
 
+    # One range's averaged answers: the probability it breaks the rule, and
+    # where, when the model is sure enough of one line or file.
+    class Window
+      attr_reader :first, :last, :probability, :place
+
+      def initialize(first, last, probability, place)
+        @first = first
+        @last = last
+        @probability = probability
+        @place = place
+      end
+    end
+
+    # A finding names a line or file when it gets at least this share of the
+    # "where" answer.
+    PLACE_AT = 0.5
+    # A choice takes at most this many options.
+    MAX_OPTIONS = 255
+
     # +clients+ has one Client per model in config.models.
     def initialize(config:, rules:, clients:, cache:)
       @config = config
@@ -150,14 +169,25 @@ module Judgelint
         asked = []
         ranges.each do |first, last|
           asked << Question.new(rule, first, last)
-          asked << Question.new(rule, first, last, inverted: true) if rule.convention
-          asked << Question.new(rule, first, last, excuse: true) if source.hinted?(first, last)
+          places = places(source, rule, first, last)
+          asked << Question.new(rule, first, last, kind: :where, places: places) unless places.empty?
+          asked << Question.new(rule, first, last, kind: :excuse) if source.hinted?(first, last)
         end
         questions[rule] = asked
       end
       job = Job.new(source, questions, prose: rules.first&.prose, expected: expected)
       pack(job)
       job
+    end
+
+    # The options for asking where a bullet is broken: the range's line ids, or
+    # the directory's files. None for a rule written as a question, or past
+    # what a choice can hold.
+    def places(source, rule, first, last)
+      return [] unless rule.convention
+
+      places = rule.directory? ? source.members.map { |_path, shown| shown } : (first..last).map { |line| "L#{line}" }
+      places.size > MAX_OPTIONS ? [] : places
     end
 
     # Rules that read different context files or spec prose can't share a request.
@@ -230,11 +260,11 @@ module Judgelint
       job.expected ? found.map { |verdict| verdict.as_example(job.expected) } : found
     end
 
-    # A window's probability of a violation is the average over its questions
-    # (a bullet is asked both ways) and the models; a rule's verdict is its
-    # worst window. A window whose judgehint excuses it, by the same average
-    # and threshold, is reported as excused instead, unless another window
-    # breaks the rule.
+    # A window's probability of a violation is the average of its verdict
+    # over the models, and its place is the line or file the models' "where"
+    # answers agree on. A rule's verdict is its worst window. A window whose
+    # judgehint excuses it, by the same average and threshold, is reported as
+    # excused instead, unless another window breaks the rule.
     def verdict_for(rule, path, questions, job)
       return Verdict.new(rule: rule, path: path, probability: nil, status: :skipped) if job.skipped
 
@@ -243,21 +273,24 @@ module Judgelint
       questions.group_by { |question| [question.first, question.last] }.each do |(first, last), asked|
         values = []
         excuses = []
+        spread = {}
         asked.each do |question|
           job.answers.each_value do |answers|
-            yes = answers[question.key]
-            next if yes.nil?
+            answer = answers[question.key]
+            next if answer.nil?
 
             if question.excuse?
-              excuses << yes
+              excuses << answer
+            elsif question.where?
+              answer.each { |place, probability| spread[place] = (spread[place] || 0.0) + probability }
             else
-              values << question.violation(yes)
+              values << question.violation(answer)
             end
           end
         end
         next if values.empty?
 
-        window = [first, last, values.sum / values.size]
+        window = Window.new(first, last, values.sum / values.size, agreed(spread))
         if !excuses.empty? && excuses.sum / excuses.size >= rule.threshold
           excused << window
         else
@@ -266,22 +299,45 @@ module Judgelint
       end
       return Verdict.new(rule: rule, path: path, probability: nil, status: :refused) if open.empty? && excused.empty?
 
-      found = worst(rule, path, open)
+      found = worst(rule, path, open, job.source)
       return found if found && found.status != :pass
 
-      hidden = worst(rule, path, excused)
+      hidden = worst(rule, path, excused, job.source)
       return found || hidden if hidden.nil? || hidden.status == :pass
 
-      Verdict.new(rule: rule, path: path, probability: hidden.probability, status: :excused, lines: hidden.lines)
+      Verdict.new(rule: rule, path: path, probability: hidden.probability, status: :excused, lines: hidden.lines,
+                  line: hidden.line, file: hidden.file)
     end
 
-    # The worst of +windows+ ([first, last, probability]), or nil if there are none.
-    def worst(rule, path, windows)
+    # The place with at least PLACE_AT of the summed "where" probabilities.
+    # A loop rather than max_by, which Spinel's Hash doesn't have yet.
+    def agreed(spread)
+      total = 0.0
+      best = nil
+      spread.each do |place, value|
+        total += value
+        best = place if best.nil? || value > spread[best]
+      end
+      return nil if total <= 0
+
+      spread[best] / total >= PLACE_AT ? best : nil
+    end
+
+    # The worst of +windows+, or nil if there are none.
+    def worst(rule, path, windows, source)
       return nil if windows.empty?
 
-      first, last, probability = windows.max_by { |window| window[2] }
-      lines = rule.directory? ? nil : [first, last]
-      Verdict.classify(rule, path, probability, warn_at: @config.warn_at, lines: lines)
+      window = windows.max_by(&:probability)
+      line = nil
+      file = nil
+      if rule.directory?
+        member = source.members.find { |_member, shown| shown == window.place }
+        file = member[0] if member
+      elsif window.place
+        line = window.place.delete_prefix("L").to_i
+      end
+      lines = rule.directory? ? nil : [window.first, window.last]
+      Verdict.classify(rule, path, window.probability, warn_at: @config.warn_at, lines: lines, line: line, file: file)
     end
 
     # Each model's answers are cached on their own, so adding a model asks

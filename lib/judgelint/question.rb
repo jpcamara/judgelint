@@ -4,52 +4,75 @@ module Judgelint
   # One rule asked about one range of a file. The model sees the whole file;
   # the question points at the lines.
   #
-  # A spec's bullet is asked twice: whether the code breaks it, and, with the
-  # answer flipped, whether the code follows it. Decision models lean toward
-  # no on the first and yes on the second, so the average is steadier than
-  # either.
+  # A spec's bullet is a choice between breaking the rule, following it, and
+  # the rule not applying. With the three side by side, a decision model
+  # commits to an answer, where a yes/no question gets a hedge. The same
+  # request asks which line (or, for a directory, which file) breaks the rule
+  # most clearly, so a finding can name it.
   #
-  # Code with a judgehint comment is also asked whether the hint excuses it
-  # from the rule. Asked on its own, a decision model answers that sharply;
-  # told about hints inside the rule's question, it only hedges.
+  # A rule written as a question is asked yes or no, as written. Code with a
+  # judgehint comment is also asked, yes or no, whether the hint excuses it.
   class Question
     BREAKS = "The code clearly breaks the rule."
-    FOLLOWS = "The code follows the rule, or the rule doesn't apply to it."
+    FOLLOWS = "The code follows the rule."
+    NOT_APPLICABLE = "The rule doesn't apply to this code."
     EXCUSED = "A judgehint comment is about this rule, and gives a reason the code may break it."
     NOT_EXCUSED = "No judgehint comment is about this rule. Any judgehint is about a different rule, or gives no reason."
 
-    attr_reader :rule, :first, :last
+    attr_reader :rule, :first, :last, :places
 
-    def initialize(rule, first, last, inverted: false, excuse: false)
+    # +kind+ is :verdict, :where, or :excuse. +places+ are a :where question's
+    # options: line ids (L12) or the directory's files, as the model sees them.
+    def initialize(rule, first, last, kind: :verdict, places: [])
       @rule = rule
       @first = first
       @last = last
-      @inverted = inverted
-      @excuse = excuse
+      @kind = kind
+      @places = places
     end
 
     def excuse?
-      @excuse
+      @kind == :excuse
+    end
+
+    def where?
+      @kind == :where
+    end
+
+    # A spec's bullet and its location are choices; everything else is yes or no.
+    def choice?
+      where? || (@kind == :verdict && !rule.convention.nil?)
     end
 
     def key
       base = "#{rule.question_key}.#{first}-#{last}"
-      return "#{base}.excused" if @excuse
-      return base unless rule.convention
+      return "#{base}.excused" if excuse?
+      return "#{base}.where" if where?
 
-      @inverted ? "#{base}.follows" : "#{base}.breaks"
+      base
     end
 
-    # The probability the code breaks the rule, from the probability of yes.
-    def violation(yes_probability)
-      @inverted ? 1.0 - yes_probability : rule.violation_probability(yes_probability)
+    # A choice's options, as {name => description or nil}.
+    def options
+      return places.to_h { |place| [place, nil] } if where?
+
+      { "breaks" => rule.yes_means || BREAKS, "follows" => rule.no_means || FOLLOWS, "not_applicable" => NOT_APPLICABLE }
+    end
+
+    # The probability the code breaks the rule, from a verdict's answer: a
+    # choice's probabilities, or a yes/no question's probability of yes.
+    def violation(answer)
+      return answer["breaks"].to_f if answer.is_a?(Hash)
+
+      rule.violation_probability(answer)
     end
 
     # "Answer yes only when..." keeps the model from flagging code the rule
     # doesn't cover.
     def instructions
-      return excuse_instructions if @excuse
-      return convention_instructions if rule.convention
+      return excuse_instructions if excuse?
+      return where_instructions if where?
+      return "How #{rule.scope == 'file' ? 'does' : 'do'} #{subject} relate to the following team rule? Rule: #{rule.convention}" if rule.convention
 
       text = rule.window? ? "Look at lines #{first}-#{last} of the file; the rest is context. #{rule.question}" : rule.question
       return text unless rule.fail_when == "yes"
@@ -60,63 +83,41 @@ module Judgelint
     end
 
     def yes_means
-      return EXCUSED if @excuse
-      return rule.yes_means unless rule.convention
+      return EXCUSED if excuse?
+      return nil if choice?
 
-      @inverted ? rule.no_means || FOLLOWS : rule.yes_means || BREAKS
+      rule.yes_means
     end
 
     def no_means
-      return NOT_EXCUSED if @excuse
-      return rule.no_means unless rule.convention
+      return NOT_EXCUSED if excuse?
+      return nil if choice?
 
-      @inverted ? rule.yes_means || BREAKS : rule.no_means || FOLLOWS
+      rule.no_means
     end
 
     def digest
-      @digest ||= Digest::SHA256.hexdigest(JSON.generate([instructions, yes_means.to_s, no_means.to_s]))
+      @digest ||= Digest::SHA256.hexdigest(JSON.generate([instructions, yes_means.to_s, no_means.to_s,
+                                                          choice? ? options.to_a : []]))
     end
 
     private
+
+    def subject
+      { "window" => "lines #{first}-#{last} of the file", "file" => "the file", "directory" => "the files" }
+        .fetch(rule.scope)
+    end
+
+    def where_instructions
+      which = rule.directory? ? "Which file" : "Which line, given by its number as L<number>,"
+      "#{which} most clearly breaks the following team rule? Rule: #{rule.convention}"
+    end
 
     def excuse_instructions
       where = { "window" => "in lines #{first}-#{last} of the file", "file" => "in the file", "directory" => "in the files" }
               .fetch(rule.scope)
       "Does a judgehint comment #{where} explain why the code intentionally departs from the following team " \
         "rule, with a reason specific to this rule? Rule: #{rule.convention || rule.message}"
-    end
-
-    # The spec's prose is in the state as team_rules, so the bullet is "the
-    # following team rule".
-    def convention_instructions
-      ask =
-        case rule.scope
-        when "window"
-          if @inverted
-            "Do lines #{first}-#{last} of the file follow the following team rule, or does it not apply to them? " \
-              "Answer false only when those lines clearly break it."
-          else
-            "Do lines #{first}-#{last} of the file clearly violate the following team rule? Answer true only " \
-              "when the code breaks the rule, not when the rule does not apply to it."
-          end
-        when "file"
-          if @inverted
-            "Does the file follow the following team rule, or does it not apply to it? Answer false only when " \
-              "the file clearly breaks it."
-          else
-            "Does the file clearly violate the following team rule? Answer true only when the code breaks the " \
-              "rule, not when the rule does not apply to it."
-          end
-        else
-          if @inverted
-            "Do the files follow the following team rule, or does it not apply to them? Answer false only when " \
-              "they clearly break it."
-          else
-            "Do the files clearly violate the following team rule? Answer true only when the code breaks the " \
-              "rule, not when the rule does not apply to it."
-          end
-        end
-      "#{ask} Rule: #{rule.convention}"
     end
   end
 end

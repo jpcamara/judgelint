@@ -54,6 +54,11 @@ module Judgelint
       (1..line_count).step(size).map { |first| [first, [first + size - 1, line_count].min] }
     end
 
+    # The directory's files as [path, the path the model sees].
+    def members
+      @files.map { |file, _lines| [file, shown(file)] }
+    end
+
     def hinted?(first, last)
       directory? ? !@hints.empty? : @hints.any? { |line| line.between?(first, last) }
     end

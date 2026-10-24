@@ -35,18 +35,24 @@ Here's a run on the [demo app](examples/scoop-society), with the messages shorte
 ```text
 $ judgelint src/services/apply-refund.ts src/features/flavor-of-day
 src/services/apply-refund.ts
-  x error      src/services/domain-failures-are-values-never-exceptions  1-21    0.95  Domain failures are values, never exceptions.
-  x error      src/services/error-messages-are-written-for-the           1-21    0.94  Error messages are written for the API consumer.
-  x error      src/services/every-service-has-a-doc-comment              1-21    0.97  Every service has a doc comment …
+  ? uncertain  src/services/a-service-module-exports-exactly-one         1-21            0.47  A service module exports exactly one entry point.
+  x error      src/services/domain-failures-are-values-never-exceptions  13              1.00  Domain failures are values, never exceptions.
+  x error      src/services/error-messages-are-written-for-the           13              1.00  Error messages are written for the API consumer.
+  ? uncertain  src/services/input-is-validated-before-any-work           10              0.51  Input is validated before any work happens.
+  x error      src/services/every-service-has-a-doc-comment              1-21            1.00  Every service has a doc comment …
 src/features/flavor-of-day
-  x error      src/features/exactly-one-entry-point-index-ts                     0.81  Exactly one entry point, `index.ts`, …
-  x error      src/features/logic-files-are-verb-first-kebab                     0.87  Logic files are verb-first kebab-case …
-  ? uncertain  src/features/no-orphaned-files                                    0.60  No orphaned files.
-  ? uncertain  src/features/the-feature-s-name-describes-the                     0.44  The feature's name describes the capability …
+  x error      src/features/exactly-one-entry-point-index-ts             old-rotation.ts 1.00  Exactly one entry point, `index.ts`, …
+  ? uncertain  src/features/types-live-in-a-dedicated-feature            flavor.ts       0.53  Types live in a dedicated `<feature>-types.ts` file.
+  x error      src/features/logic-files-are-verb-first-kebab             flavor.ts       0.99  Logic files are verb-first kebab-case …
+  x error      src/features/no-orphaned-files                            old-rotation.ts 0.79  No orphaned files.
 
-2 files, 5 violations, 2 uncertain
-judgelint: 2 requests, 3,320 input tokens, $0.0001
+2 files, 6 violations, 3 uncertain
+judgelint: 2 requests, 6,437 input tokens, $0.0003
 ```
+
+A finding names the line that breaks the rule, or the file in a directory,
+when the model is sure of one. Otherwise it shows the lines it was asked
+about.
 
 It exits 1 when there are violations, and 2 on a usage, config, or model
 error. Config problems are caught before any request is sent.
@@ -68,13 +74,13 @@ excludes: ["src/services/legacy-import.ts"]
 - **No I/O except through the injected Store.** No timers, no fetch, no console.
 ```
 
-The model gets the spec and the numbered file. judgelint asks whether the code
-breaks each bullet and whether it follows it, and averages the two answers.
-A rule's id comes from the start of its bullet, like
+The model gets the spec and the numbered file. For each bullet, it chooses
+whether the code breaks it, follows it, or isn't covered by it, and which line
+breaks it most clearly. A rule's id comes from the start of its bullet, like
 `src/services/no-i-o-except-through-the`. Bullets that say "should" or
 "prefer" are warnings, and the rest are errors.
 
-If the model misreads a bullet, describe both sides under it:
+If the model misreads a bullet, describe breaking and following it:
 
 ```markdown
 - **No I/O except through the injected Store.** No timers, no fetch, no console.
@@ -89,7 +95,7 @@ you meant to allow, so check them against examples.
 |---|---|
 | `paths`, `excludes` | Globs for the files the spec covers, relative to the project root. |
 | `context` | Files the model reads along with each file, like shared types. They're never judged. |
-| `scope` | `window`, the default, asks about every 40 lines so findings have line numbers. `file` asks once per file. `directory` asks once per directory and shows the model every file in it. |
+| `scope` | `window`, the default, asks about every 40 lines so findings have line numbers. `file` asks once per file. `directory` asks once per directory, shows the model every file in it, and names the file that breaks the rule. |
 | `severity`, `threshold` | Set the severity or threshold for every rule in the spec. |
 
 Each answer is the probability that the code breaks the rule. At 0.7 or above
@@ -176,9 +182,8 @@ Every run prints what it cost. Answers are cached in `.judgelint/cache.json`,
 so a file that hasn't changed costs nothing. Commit the cache to share it.
 `judgelint --help` lists the flags.
 
-Two models give steadier answers. On the [demo app](examples/scoop-society),
-Jev alone leaves about 10 findings uncertain, and Jev averaged with
-Cloudflare's Clef leaves 4, for about $0.02 a run.
+List two models to average their answers, like `models: [typesafe,
+cloudflare]`. Each model's answers are cached separately.
 
 ### Providers
 
