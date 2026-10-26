@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.6 (2026-10-26)
 
 - `--base` and `--pr` ask about the changed lines, not the 40-line windows
   around them. A finding the model places on a line the change didn't touch
