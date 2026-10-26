@@ -287,9 +287,10 @@ module Judgelint
     # A window's probability of a violation is the average of its verdict
     # over the models, and its place is the line or file the models' "where"
     # answers agree on. When a change touched only some of its lines, the
-    # probability counts only the share of "where" answers on those lines. A rule's verdict is its worst window. A window whose
-    # judgehint excuses it, by the same average and threshold, is reported as
-    # excused instead, unless another window breaks the rule.
+    # probability counts only the share of "where" answers on those lines. A
+    # rule's verdict is its worst window. A window whose judgehint excuses it,
+    # by the same average and threshold, is reported as excused instead,
+    # unless another window breaks the rule.
     def verdict_for(rule, path, questions, job)
       return Verdict.new(rule: rule, path: path, probability: nil, status: :skipped) if job.skipped
 
