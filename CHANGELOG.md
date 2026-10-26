@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.5 (2026-10-26)
 
 - The text report is in color in a terminal: errors in red, warnings and
   uncertain findings in yellow, and file names in bold. `judgelint test`
