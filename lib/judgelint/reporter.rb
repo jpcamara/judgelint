@@ -6,11 +6,15 @@ module Judgelint
   class Reporter
     FORMATS = %w[text json github sarif].freeze
     MARKS = { violation: "x", uncertain: "?", skipped: "-", refused: "-", excused: "-" }.freeze
+    # In color, a violation's mark is a cross.
+    COLOR_MARKS = { violation: "\u2717", uncertain: "?", skipped: "-", refused: "-", excused: "-" }.freeze
     STATUSES = %w[violation uncertain pass skipped refused excused].freeze
 
-    def initialize(out, format:)
+    # +paint+ colors the text format; the others are never colored.
+    def initialize(out, format:, paint: Paint.new(false))
       @out = out
       @format = format
+      @paint = paint
     end
 
     def check(verdicts, config:, file_count:, usage:)
@@ -27,14 +31,18 @@ module Judgelint
 
       examples.group_by(&:rule).each do |rule, group|
         correct = group.count(&:correct?)
-        @out.puts "#{rule.id}  #{correct}/#{group.size}"
+        tally = @paint.call("#{correct}/#{group.size}", correct == group.size ? Paint::GREEN : Paint::RED)
+        @out.puts "#{@paint.call(rule.id, Paint::BOLD)}  #{tally}"
         group.each do |example|
-          mark = example.correct? ? "ok" : "MISS"
-          @out.puts format("  %-4s %-4s %s  %s", mark, example.expected, probability(example), example.path)
+          mark = example.correct? ? cell("ok", 4, Paint::GREEN) : @paint.call("MISS", Paint::BOLD_RED)
+          @out.puts "  #{mark} #{cell(example.expected.to_s, 4, Paint::DIM)} " \
+                    "#{probability(example)}  #{@paint.call(example.path, Paint::CYAN)}"
         end
       end
       @out.puts "" unless examples.empty?
-      @out.puts "#{examples.count(&:correct?)}/#{examples.size} examples judged correctly"
+      correct = examples.count(&:correct?)
+      @out.puts @paint.call("#{correct}/#{examples.size} examples judged correctly",
+                            correct == examples.size ? Paint::BOLD_GREEN : Paint::BOLD_RED)
     end
 
     private
@@ -48,17 +56,34 @@ module Judgelint
       width = shown.map { |verdict| verdict.rule.id.size }.max
       places = [7, *shown.map { |verdict| range(verdict).size }].max
       shown.group_by(&:path).each do |path, group|
-        @out.puts path
+        @out.puts @paint.call(path, Paint::BOLD)
         group.each { |verdict| @out.puts "  #{line(verdict, width, places)}" }
       end
       @out.puts "" unless shown.empty?
       @out.puts summary(verdicts, file_count)
     end
 
+    # Columns are padded before they're colored, so they line up either way.
     def line(verdict, width, places)
       label = verdict.status == :violation ? verdict.rule.severity : verdict.status.to_s
-      format("%s %-10s %-#{width}s  %-#{places}s %s  %s", MARKS.fetch(verdict.status), label, verdict.rule.id,
-             range(verdict), probability(verdict), verdict.rule.message)
+      marks = @paint.on? ? COLOR_MARKS : MARKS
+      tone = tone(verdict)
+      [cell("#{marks.fetch(verdict.status)} #{label}", 12, tone), cell(verdict.rule.id, width, Paint::DIM),
+       " #{cell(range(verdict), places, Paint::CYAN)}", "#{@paint.call(probability(verdict), tone)} ",
+       verdict.rule.message].join(" ")
+    end
+
+    # +text+ in color, padded to +width+ outside it.
+    def cell(text, width, code)
+      "#{@paint.call(text, code)}#{' ' * [width - text.size, 0].max}"
+    end
+
+    # Errors are red, warnings and uncertain findings yellow, the rest dim.
+    def tone(verdict)
+      return Paint::YELLOW if verdict.status == :uncertain
+      return Paint::DIM unless verdict.status == :violation
+
+      verdict.rule.error? ? Paint::BOLD_RED : Paint::YELLOW
     end
 
     # The line that breaks the rule, or the range asked about; for a
@@ -78,11 +103,13 @@ module Judgelint
 
     def summary(verdicts, file_count)
       counts = verdicts.group_by(&:status).transform_values(&:size)
-      parts = ["#{file_count} #{file_count == 1 ? 'file' : 'files'}", "#{counts.fetch(:violation, 0)} violations"]
-      parts << "#{counts[:uncertain]} uncertain" if counts[:uncertain]
-      parts << "#{counts[:skipped]} skipped (too large)" if counts[:skipped]
-      parts << "#{counts[:refused]} refused by the model" if counts[:refused]
-      parts << "#{counts[:excused]} excused by judgehints" if counts[:excused]
+      violations = counts.fetch(:violation, 0)
+      parts = ["#{file_count} #{file_count == 1 ? 'file' : 'files'}",
+               @paint.call("#{violations} violations", violations.zero? ? Paint::BOLD_GREEN : Paint::BOLD_RED)]
+      parts << @paint.call("#{counts[:uncertain]} uncertain", Paint::YELLOW) if counts[:uncertain]
+      parts << @paint.call("#{counts[:skipped]} skipped (too large)", Paint::DIM) if counts[:skipped]
+      parts << @paint.call("#{counts[:refused]} refused by the model", Paint::DIM) if counts[:refused]
+      parts << @paint.call("#{counts[:excused]} excused by judgehints", Paint::DIM) if counts[:excused]
       parts.join(", ")
     end
 

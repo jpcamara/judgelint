@@ -82,6 +82,9 @@ about.
 It exits 1 when there are violations, and 2 on a usage, config, or model
 error. Config problems are caught before any request is sent.
 
+In a terminal, the report is in color. Set `NO_COLOR` to turn color off, or
+`FORCE_COLOR` to keep it when the output is piped.
+
 ## Writing specs
 
 A spec is a `CONVENTIONS.md`, a file ending in `.judgelint.md`, or a README

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- The text report is in color in a terminal: errors in red, warnings and
+  uncertain findings in yellow, and file names in bold. `judgelint test`
+  marks hits green and misses red. `NO_COLOR` turns color off and
+  `FORCE_COLOR` turns it on. Piped output is unchanged.
+
 ## 0.1.4 (2026-10-24)
 
 - `Bad:` and `Good:` code blocks under a bullet are examples. The model reads

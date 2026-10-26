@@ -51,6 +51,8 @@ module Judgelint
       @overrides = {}
       @usage = nil
       @no_cache = false
+      @paint = Paint.for(out)
+      @err_paint = Paint.for(err)
     end
 
     def run
@@ -66,13 +68,13 @@ module Judgelint
       when "init" then init
       end
     rescue UsageError => e
-      @err.puts "judgelint: #{e.message}"
-      @err.puts "Run `judgelint --help` for usage."
+      @err.puts "#{@err_paint.call('judgelint:', Paint::BOLD_RED)} #{e.message}"
+      @err.puts @err_paint.call("Run `judgelint --help` for usage.", Paint::DIM)
       2
     rescue Error => e
-      @err.puts "judgelint: #{e.message}"
+      @err.puts "#{@err_paint.call('judgelint:', Paint::BOLD_RED)} #{e.message}"
       # Requests that succeeded before the failure are still billed.
-      @err.puts "#{@usage.line}, #{@models}" if @usage && @usage.requests.positive?
+      cost_line if @usage && @usage.requests.positive?
       2
     end
 
@@ -141,8 +143,8 @@ module Judgelint
       runner.check_keys(jobs)
       guard_cost(config, runner, jobs)
       verdicts = runner.execute(jobs).flatten
-      Reporter.new(@out, format: @format).check(verdicts, config: config, file_count: units, usage: @usage)
-      @err.puts "#{@usage.line}, #{@models}"
+      Reporter.new(@out, format: @format, paint: @paint).check(verdicts, config: config, file_count: units, usage: @usage)
+      cost_line
       verdicts.any?(&:failing?) ? 1 : 0
     end
 
@@ -189,8 +191,8 @@ module Judgelint
       runner.check_keys(jobs)
       guard_cost(config, runner, jobs)
       examples = runner.execute(jobs).flatten
-      Reporter.new(@out, format: @format).fixtures(examples, usage: @usage)
-      @err.puts "#{@usage.line}, #{@models}"
+      Reporter.new(@out, format: @format, paint: @paint).fixtures(examples, usage: @usage)
+      cost_line
       examples.all?(&:correct?) ? 0 : 1
     end
 
@@ -202,6 +204,11 @@ module Judgelint
       raise ConfigError, format("This run would send %d requests, about %s input tokens ($%.2f), over max_cost_usd " \
                                 "($%.2f). Pass --yes to run it anyway.", runner.request_count(jobs),
                                 Usage.delimit(runner.estimated_tokens(jobs)), estimate, config.max_cost_usd)
+    end
+
+    # What the run cost, and which models answered.
+    def cost_line
+      @err.puts @err_paint.call("#{@usage.line}, #{@models}", Paint::DIM)
     end
 
     def list_rules

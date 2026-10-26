@@ -447,6 +447,44 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_force_color_colors_the_text_report_only
+    in_smelly_project do
+      write(".judgelint/rules/smell/fail/bad.rb", "SMELL")
+      write(".judgelint/rules/smell/pass/good.rb", "fine")
+      color = { "FORCE_COLOR" => "1" }
+      runners.each do |name, run|
+        status, out, err = run.call(["check"], extra_env: color)
+        assert_equal 1, status, name
+        assert_match(/^\e\[1mapp\/bad\.rb\e\[0m\n  \e\[1;31m\u2717 error\e\[0m +\e\[2msmell\e\[0m/, out, name)
+        assert_match(/\e\[1;31m0\.90\e\[0m  Smelly code is hard to change\.$/, out, name)
+        assert_match(/^2 files, \e\[1;31m1 violations\e\[0m$/, out, name)
+        assert_match(/\A\e\[2mjudgelint: 2 requests/, err, name)
+
+        _status, out, = run.call(["test"], extra_env: color)
+        assert_match(/^\e\[1msmell\e\[0m  \e\[32m2\/2\e\[0m$/, out, name)
+        assert_match(/^  \e\[32mok\e\[0m   \e\[2mfail\e\[0m /, out, name)
+
+        _status, out, = run.call(["check", "--format", "json"], extra_env: color)
+        refute_includes out, "\e[", name
+
+        _status, _out, err = run.call(["--frobnicate"], extra_env: color)
+        assert_match(/\A\e\[1;31mjudgelint:\e\[0m unknown option/, err, name)
+      end
+    end
+  end
+
+  def test_no_color_and_pipes_stay_plain
+    in_smelly_project do
+      runners.each do |name, run|
+        _status, plain, = run.call(["check"])
+        _status, out, err = run.call(["check"], extra_env: { "FORCE_COLOR" => "1", "NO_COLOR" => "1" })
+        assert_equal plain, out, name
+        refute_includes plain, "\e[", name
+        refute_includes err, "\e[", name
+      end
+    end
+  end
+
   private
 
   def in_smelly_project(&)
