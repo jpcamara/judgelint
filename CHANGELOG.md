@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `--base` and `--pr` ask about the changed lines, not the 40-line windows
+  around them. A finding the model places on a line the change didn't touch
+  doesn't count, so editing an old file can't fail it for code the edit
+  left alone.
+
 ## 0.1.5 (2026-10-26)
 
 - The text report is in color in a terminal: errors in red, warnings and

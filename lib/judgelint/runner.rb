@@ -72,6 +72,8 @@ module Judgelint
 
     # +changes+ ({path => lines or :all}, from Changes.since) limits each file
     # to the windows a change touched, and directories to those with a change.
+    # A window rule is asked about the changed lines alone, with the rest of
+    # the file as context.
     # Rules that read different context files can't share a request, so a
     # file gets one job per set of context files.
     def plan(paths, directories: [], changes: nil)
@@ -182,7 +184,7 @@ module Judgelint
 
         asked = []
         ranges.each do |first, last|
-          asked << Question.new(rule, first, last)
+          asked << Question.new(rule, first, last, lines: changed_lines(rule, lines, first, last))
           places = places(source, rule, first, last)
           asked << Question.new(rule, first, last, kind: :where, places: places) unless places.empty?
           asked << Question.new(rule, first, last, kind: :excuse) if source.hinted?(first, last)
@@ -207,6 +209,14 @@ module Judgelint
     # Rules that read different context files or spec prose can't share a request.
     def by_context(rules)
       rules.group_by { |rule| [rule.context, rule.prose] }.map { |(globs, _prose), group| yield(Glob.expand(globs), group) }
+    end
+
+    # The lines a change touched in a window rule's range, or nil for all of them.
+    def changed_lines(rule, lines, first, last)
+      return nil if lines == :all || !rule.window?
+
+      changed = lines.select { |line| line.between?(first, last) }.uniq.sort
+      changed.size == last - first + 1 ? nil : changed
     end
 
     def touched?(lines, first, last)
@@ -276,7 +286,8 @@ module Judgelint
 
     # A window's probability of a violation is the average of its verdict
     # over the models, and its place is the line or file the models' "where"
-    # answers agree on. A rule's verdict is its worst window. A window whose
+    # answers agree on. When a change touched only some of its lines, the
+    # probability counts only the share of "where" answers on those lines. A rule's verdict is its worst window. A window whose
     # judgehint excuses it, by the same average and threshold, is reported as
     # excused instead, unless another window breaks the rule.
     def verdict_for(rule, path, questions, job)
@@ -304,7 +315,10 @@ module Judgelint
         end
         next if values.empty?
 
-        window = Window.new(first, last, values.sum / values.size, agreed(spread))
+        probability = values.sum / values.size
+        changed = asked.first.lines # the verdict question comes first
+        probability *= changed_share(spread, changed) if changed
+        window = Window.new(first, last, probability, agreed(spread))
         if !excuses.empty? && excuses.sum / excuses.size >= rule.threshold
           excused << window
         else
@@ -321,6 +335,18 @@ module Judgelint
 
       Verdict.new(rule: rule, path: path, probability: hidden.probability, status: :excused, lines: hidden.lines,
                   line: hidden.line, file: hidden.file)
+    end
+
+    # The share of the summed "where" probabilities on +lines+, or all of it
+    # when nothing answered where.
+    def changed_share(spread, lines)
+      total = 0.0
+      changed = 0.0
+      spread.each do |place, value|
+        total += value
+        changed += value if lines.include?(place.delete_prefix("L").to_i)
+      end
+      total.positive? ? changed / total : 1.0
     end
 
     # The place with at least PLACE_AT of the summed "where" probabilities.

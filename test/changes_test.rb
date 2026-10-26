@@ -99,6 +99,15 @@ class SourceTest < Minitest::Test
     assert_equal "Does this code smell? Answer yes only when the code does it, not when the question doesn't apply.",
                  file.instructions
 
+    changed = Judgelint::Question.new(rule, 41, 80, lines: [43, 50, 51, 52])
+    assert_equal "smell.41-80", changed.key
+    assert_equal "Look at lines 43, 50-52 of the file; the rest is context. Does this code smell? " \
+                 "Answer yes only when those lines do it, not when the question doesn't apply.", changed.instructions
+
+    bullet = Judgelint::Rule.new({ "convention" => "No fetch." }, source: "README.md")
+    assert_equal "How does line 7 of the file relate to the following team rule? Rule: No fetch.",
+                 Judgelint::Question.new(bullet, 1, 40, lines: [7]).instructions
+
     validates = Judgelint::Question.new(rule(question: "Does it validate input first?", fail_when: "no"), 1, 100)
     assert_equal "Does it validate input first?", validates.instructions
   end

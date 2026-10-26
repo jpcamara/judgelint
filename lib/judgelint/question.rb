@@ -2,7 +2,9 @@
 
 module Judgelint
   # One rule asked about one range of a file. The model sees the whole file;
-  # the question points at the lines.
+  # the question points at the lines. When a change touched only some of a
+  # window's lines, it points at those, so code the change didn't touch can't
+  # fail it.
   #
   # A spec's bullet is a choice between breaking the rule, following it, and
   # the rule not applying. With the three side by side, a decision model
@@ -19,16 +21,18 @@ module Judgelint
     EXCUSED = "A judgehint comment is about this rule, and gives a reason the code may break it."
     NOT_EXCUSED = "No judgehint comment is about this rule. Any judgehint is about a different rule, or gives no reason."
 
-    attr_reader :rule, :first, :last, :places
+    attr_reader :rule, :first, :last, :places, :lines
 
     # +kind+ is :verdict, :where, or :excuse. +places+ are a :where question's
     # options: line ids (L12) or the directory's files, as the model sees them.
-    def initialize(rule, first, last, kind: :verdict, places: [])
+    # +lines+ are the changed lines in the range, or nil to ask about all of it.
+    def initialize(rule, first, last, kind: :verdict, places: [], lines: nil)
       @rule = rule
       @first = first
       @last = last
       @kind = kind
       @places = places
+      @lines = lines
     end
 
     def excuse?
@@ -72,9 +76,9 @@ module Judgelint
     def instructions
       return excuse_instructions if excuse?
       return where_instructions if where?
-      return "How #{rule.scope == 'file' ? 'does' : 'do'} #{subject} relate to the following team rule? Rule: #{rule.convention}" if rule.convention
+      return "How #{rule.scope == 'file' || lines&.size == 1 ? 'does' : 'do'} #{subject} relate to the following team rule? Rule: #{rule.convention}" if rule.convention
 
-      text = rule.window? ? "Look at lines #{first}-#{last} of the file; the rest is context. #{rule.question}" : rule.question
+      text = rule.window? ? "Look at #{span} of the file; the rest is context. #{rule.question}" : rule.question
       return text unless rule.fail_when == "yes"
 
       scope = { "window" => "those lines do it", "file" => "the code does it", "directory" => "the files do it" }
@@ -104,8 +108,24 @@ module Judgelint
     private
 
     def subject
-      { "window" => "lines #{first}-#{last} of the file", "file" => "the file", "directory" => "the files" }
-        .fetch(rule.scope)
+      { "window" => "#{span} of the file", "file" => "the file", "directory" => "the files" }.fetch(rule.scope)
+    end
+
+    # The lines asked about: "lines 41-80", or the changed ones, as "line 7" or
+    # "lines 3, 7-9".
+    def span
+      return "lines #{first}-#{last}" if lines.nil?
+      return "line #{lines.first}" if lines.size == 1
+
+      runs = []
+      lines.each do |line|
+        if !runs.empty? && runs.last[1] == line - 1
+          runs.last[1] = line
+        else
+          runs << [line, line]
+        end
+      end
+      "lines #{runs.map { |run| run[0] == run[1] ? run[0].to_s : "#{run[0]}-#{run[1]}" }.join(', ')}"
     end
 
     def where_instructions

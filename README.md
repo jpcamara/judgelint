@@ -227,8 +227,11 @@ judgelint --pr                   # changes in the current pull request
 judgelint --pr --format github   # GitHub annotations on the changed lines (json and sarif work too)
 ```
 
-These only ask about the 40-line windows that changed, so existing code
-doesn't block a new pull request. `--pr` gets the base branch from GitHub
+These only ask about the lines that changed, with the rest of the file as
+context, so existing code doesn't block a new pull request: a finding the
+model places on a line the change didn't touch doesn't count. A new file is
+all changed lines. Rules about a whole file (`scope: file`) still read the
+whole file when any of it changed. `--pr` gets the base branch from GitHub
 Actions, GitLab, Buildkite, Bitbucket, Azure Pipelines,
 `JUDGELINT_BASE_BRANCH`, or `gh`. Fetch enough history for git to find the
 merge base.

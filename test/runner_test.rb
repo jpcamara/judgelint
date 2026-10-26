@@ -57,6 +57,31 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_a_window_rule_asks_about_the_changed_lines_alone
+    in_project do
+      write("app/a.rb", "x\n" * 130)
+      asked = []
+      client = FakeClient.new { |_state, question| asked << question.instructions[/\ALook at [^;]+/]; 0.1 }
+      judge([rule, rule("whole", scope: "file")], client, %w[app/a.rb], changes: { "app/a.rb" => [45, 46, 125] })
+
+      assert_equal ["Look at lines 45-46 of the file", "Look at line 125 of the file", nil], asked
+    end
+  end
+
+  def test_a_finding_on_a_line_the_change_didnt_touch_passes
+    in_project do
+      write("app/a.rb", "x\n" * 50)
+      bullet = Judgelint::Rule.new({ "convention" => "No smells.", "paths" => ["app/**/*.rb"] }, source: "README.md")
+      # The where answer puts the finding on the window's first line, L41.
+      client = FakeClient.new { 0.9 }
+      untouched = judge([bullet], client, %w[app/a.rb], changes: { "app/a.rb" => [45] }).first
+      touched = judge([bullet], client, %w[app/a.rb], changes: { "app/a.rb" => [41] }).first
+
+      assert_equal [:pass, 0.0], [untouched.status, untouched.probability]
+      assert_equal [:violation, 41], [touched.status, touched.line]
+    end
+  end
+
   def test_a_directory_rule_judges_each_directory_as_one_unit
     in_project do
       write("app/features/a/index.rb", "one\n")
