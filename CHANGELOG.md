@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.9 (2026-10-27)
+
+- `check` uses much less memory on large projects. On 50,000 files its
+  peak falls from 835 MB to 518 MB in Ruby and from 2.25 GB to 856 MB in
+  the native binary. Output is unchanged.
+
 ## 0.1.8 (2026-10-26)
 
 - YAML that names a class `safe_load` won't build, like `!ruby/sym` or a
