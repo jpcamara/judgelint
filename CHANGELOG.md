@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.7 (2026-10-26)
+
+- A symlink that points to itself no longer crashes a run. Ruby's Dir.glob
+  raised ELOOP when a pattern looked inside one; judgelint now skips it.
+
 ## 0.1.6 (2026-10-26)
 
 - `--base` and `--pr` ask about the changed lines, not the 40-line windows
