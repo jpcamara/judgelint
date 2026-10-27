@@ -19,6 +19,9 @@ module Judgelint
     # parsed: a number or literal, or a line of a hash of them with an ASCII
     # name. Anything else is parsed to check it.
     SCALAR = /\A(?:-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|null|true|false)\z/
+    # Spinel's JSON parser outruns its regexps, where CRuby's parser makes
+    # more garbage than its regexps do, so only CRuby checks by pattern.
+    BY_PATTERN = RUBY_ENGINE != "spinel"
     MEMBER = %r{\A    "(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\["\\/bfnrt])*": (?:-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|null|true|false),?\r?\n\z}
     KEY_SIZE = 64
     # Where a value starts in its entry's first line.
@@ -284,7 +287,7 @@ module Judgelint
         return false if closed
 
         if open && line.start_with?("    ")
-          plain &&= comma && line.match?(MEMBER)
+          plain &&= BY_PATTERN && comma && line.match?(MEMBER)
           comma = line.end_with?(",\n", ",\r\n")
           offset += line.bytesize
           next
@@ -319,7 +322,7 @@ module Judgelint
           else
             ended = !rest.end_with?(",")
             value = ended ? rest : rest.delete_suffix(",")
-            return false unless indexed(last, start, value.bytesize, value.match?(SCALAR), value)
+            return false unless indexed(last, start, value.bytesize, BY_PATTERN && value.match?(SCALAR), value)
           end
         end
         offset += line.bytesize
