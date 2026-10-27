@@ -14,21 +14,26 @@ module Judgelint
     # One file's work: the questions to ask, each model's answers (from the
     # cache or the model), and the requests still to send.
     class Job
-      attr_reader :source, :state, :state_digest, :questions, :answers, :requests, :expected
+      attr_reader :source, :state_digest, :questions, :answers, :requests, :expected
       attr_accessor :skipped
 
-      # The state is built and hashed once: it's the whole file, and every
-      # question's cache key needs its hash. Rules from a spec read its prose
-      # alongside the file, as team_rules.
+      # The state is the whole file, and a run plans every file before it
+      # sends one, so it's built when needed rather than kept. Its hash, which
+      # every question's cache key needs, is kept.
       def initialize(source, questions, prose: nil, expected: nil)
         @source = source
-        @state = prose ? { "team_rules" => prose, "file" => source.state } : source.state
-        @state_digest = Digest::SHA256.hexdigest(JSON.generate(@state))
+        @prose = prose
+        @state_digest = Digest::SHA256.hexdigest(JSON.generate(state))
         @questions = questions
         @answers = {} # model index => {question key => probability or nil}
         @requests = []
         @expected = expected
         @skipped = false
+      end
+
+      # Rules from a spec read its prose alongside the file, as team_rules.
+      def state
+        @prose ? { "team_rules" => @prose, "file" => @source.state } : @source.state
       end
     end
 
@@ -185,8 +190,7 @@ module Judgelint
         asked = []
         ranges.each do |first, last|
           asked << Question.new(rule, first, last, lines: changed_lines(rule, lines, first, last))
-          places = places(source, rule, first, last)
-          asked << Question.new(rule, first, last, kind: :where, places: places) unless places.empty?
+          asked << where(source, rule, first, last) if where?(source, rule, first, last)
           asked << Question.new(rule, first, last, kind: :excuse) if source.hinted?(first, last)
         end
         questions[rule] = asked
@@ -196,14 +200,17 @@ module Judgelint
       job
     end
 
-    # The options for asking where a bullet is broken: the range's line ids, or
-    # the directory's files. None for a rule written as a question, or past
+    # Where a bullet is broken is asked over the range's lines or the
+    # directory's files, but not for a rule written as a question, or past
     # what a choice can hold.
-    def places(source, rule, first, last)
-      return [] unless rule.convention
+    def where?(source, rule, first, last)
+      rule.convention && (rule.directory? ? source.members.size : last - first + 1) <= MAX_OPTIONS
+    end
 
-      places = rule.directory? ? source.members.map { |_path, shown| shown } : (first..last).map { |line| "L#{line}" }
-      places.size > MAX_OPTIONS ? [] : places
+    # A file's line ids are made when the question is sent, not kept.
+    def where(source, rule, first, last)
+      places = rule.directory? ? source.members.map { |_path, shown| shown } : nil
+      Question.new(rule, first, last, kind: :where, places: places)
     end
 
     # Rules that read different context files or spec prose can't share a request.
@@ -264,7 +271,9 @@ module Judgelint
 
     # Sends every request at once: a file's packed requests and every model's.
     def ask(job)
-      state = job.state.dup # Spinel can't yet pass the Job's shared String along
+      return if job.requests.empty?
+
+      state = job.state
       results = Pool.map(job.requests, job.requests.size) do |request|
         @clients[request.model].judge(state, request.questions)
       end

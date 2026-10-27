@@ -21,18 +21,23 @@ module Judgelint
     EXCUSED = "A judgehint comment is about this rule, and gives a reason the code may break it."
     NOT_EXCUSED = "No judgehint comment is about this rule. Any judgehint is about a different rule, or gives no reason."
 
-    attr_reader :rule, :first, :last, :places, :lines
+    attr_reader :rule, :first, :last, :lines
 
     # +kind+ is :verdict, :where, or :excuse. +places+ are a :where question's
-    # options: line ids (L12) or the directory's files, as the model sees them.
+    # options as the model sees them: the directory's files, or nil for the
+    # range's line ids (L12).
     # +lines+ are the changed lines in the range, or nil to ask about all of it.
-    def initialize(rule, first, last, kind: :verdict, places: [], lines: nil)
+    def initialize(rule, first, last, kind: :verdict, places: nil, lines: nil)
       @rule = rule
       @first = first
       @last = last
       @kind = kind
       @places = places
       @lines = lines
+    end
+
+    def places
+      @places || (first..last).map { |line| "L#{line}" }
     end
 
     def excuse?
