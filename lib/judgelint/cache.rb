@@ -9,7 +9,8 @@ module Judgelint
   # every entry and keeps its key and where it is, and a lookup finds the
   # key by binary search and reads that entry back. Any other JSON object is
   # read whole. New answers wait for #save in a scratch file beside the
-  # cache, already in the form it writes.
+  # cache, already in the form it writes. A run saves its cache once, when
+  # it's done.
   class Cache
     # A line that starts an entry: its key, then its value or the value's
     # first line.
@@ -75,6 +76,7 @@ module Judgelint
         FileUtils.mkdir_p(File.dirname(@path))
         temp = "#{@path}.#{Process.pid}.tmp"
         File.open(temp, "w") { |out| write(out) }
+        close
         File.rename(temp, @path)
         @dirty = false
       end
@@ -120,44 +122,82 @@ module Judgelint
       (offset << SPAN_BITS) | length
     end
 
-    # Opened and then deleted, so it goes away with the process.
+    # Deleted as soon as it's open where the system allows that, so it goes
+    # away with the process; elsewhere, once the cache is saved.
     def scratch
       FileUtils.mkdir_p(File.dirname(@path))
       path = "#{@path}.#{Process.pid}.answers"
       file = File.open(path, "w+")
-      File.delete(path)
+      begin
+        File.delete(path)
+      rescue SystemCallError
+        @scratch_path = path
+      end
       @scratch_size = 0
       file
+    end
+
+    # The file can't be replaced while it's open everywhere.
+    def close
+      @file&.close
+      @scratch&.close
+      File.delete(@scratch_path) if @scratch_path
     end
 
     # Merges the file's entries, or those read whole, with the answers stored
     # this run, which replace any with the same key.
     def write(out)
-      keys = Array.new(@stored_places.size) { |index| @stored_keys.byteslice(index * KEY_SIZE, KEY_SIZE) }
-      stored = latest(keys)
       whole = @entries.keys.sort
       kept = whole.empty? ? @places.size : whole.size
-      written = 0
+      count = 0
       i = 0
-      j = 0
-      while i < kept || j < stored.size
-        mine = i < kept ? (whole.empty? ? @keys.byteslice(i * KEY_SIZE, KEY_SIZE) : whole[i]) : nil
-        theirs = j < stored.size ? keys[stored[j]] : nil
-        if theirs.nil? || (mine && mine < theirs)
-          key = mine
-          text = JSON.pretty_generate(whole.empty? ? read(@file, @places[i]) : @entries[key])
-          i += 1
-        else
-          i += 1 if mine == theirs
-          key = theirs
-          text = raw(@scratch, @stored_places[stored[j]])
-          j += 1
+      stored_buckets.each do |bucket|
+        keys = bucket.map { |index| @stored_keys.byteslice(index * KEY_SIZE, KEY_SIZE) }
+        latest(keys).each do |n|
+          key = keys[n]
+          while i < kept && (mine = kept_key(whole, i)) < key
+            count = entry(out, count, mine, kept_text(whole, i))
+            i += 1
+          end
+          i += 1 if i < kept && kept_key(whole, i) == key
+          count = entry(out, count, key, raw(@scratch, @stored_places[bucket[n]]))
         end
-        out.write(written.zero? ? "{\n" : ",\n")
-        out.write("  #{JSON.generate(key)}: #{text.gsub("\n", "\n  ")}")
-        written += 1
       end
-      out.write(written.zero? ? "{}\n" : "\n}\n")
+      while i < kept
+        count = entry(out, count, kept_key(whole, i), kept_text(whole, i))
+        i += 1
+      end
+      out.write(count.zero? ? "{}\n" : "\n}\n")
+    end
+
+    def entry(out, count, key, text)
+      out.write(count.zero? ? "{\n" : ",\n")
+      out.write("  #{JSON.generate(key)}: #{text.gsub("\n", "\n  ")}")
+      count + 1
+    end
+
+    def kept_key(whole, index)
+      whole.empty? ? @keys.byteslice(index * KEY_SIZE, KEY_SIZE) : whole[index]
+    end
+
+    def kept_text(whole, index)
+      JSON.pretty_generate(whole.empty? ? read(@file, @places[index]) : @entries[whole[index]])
+    end
+
+    # The answers stored this run, by the first two hex digits of their keys:
+    # in key order a bucket at a time, so only one bucket's keys are out at
+    # once.
+    def stored_buckets
+      buckets = Array.new(256) { [] }
+      @stored_places.size.times do |index|
+        at = index * KEY_SIZE
+        buckets[(digit(@stored_keys.getbyte(at)) << 4) | digit(@stored_keys.getbyte(at + 1))] << index
+      end
+      buckets
+    end
+
+    def digit(byte)
+      byte < 97 ? byte - 48 : byte - 87
     end
 
     # The indexes of +keys+ in key order, keeping the latest of any stored twice.

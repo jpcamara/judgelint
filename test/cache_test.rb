@@ -58,6 +58,25 @@ class CacheTest < Minitest::Test
     end
   end
 
+  def test_a_scratch_file_that_cant_be_deleted_while_open_goes_when_saved
+    in_tmp do
+      cache = Judgelint::Cache.new("cache.json")
+      delete = File.method(:delete)
+      File.define_singleton_method(:delete) { |*paths| raise Errno::EACCES, paths.first }
+      begin
+        cache.store("a" * 64, 0.5)
+      ensure
+        File.define_singleton_method(:delete, delete)
+      end
+      scratch = "cache.json.#{Process.pid}.answers"
+
+      assert File.exist?(scratch)
+      cache.save
+      refute File.exist?(scratch)
+      assert_equal "#{JSON.pretty_generate({ 'a' * 64 => 0.5 })}\n", File.read("cache.json")
+    end
+  end
+
   def test_a_file_in_another_form_is_read_whole_and_saved_in_key_order
     in_tmp do
       File.write("cache.json", JSON.generate(ENTRIES.to_a.reverse.to_h))
@@ -68,6 +87,24 @@ class CacheTest < Minitest::Test
       cache.save
 
       assert_equal "#{JSON.pretty_generate(ENTRIES.merge('f' * 64 => 1.0).sort.to_h)}\n", File.read("cache.json")
+    end
+  end
+
+  def test_many_answers_merge_in_key_order
+    in_tmp do
+      random = Random.new(7)
+      key = -> { format("%064x", random.rand(2**256)) }
+      file = Array.new(300) { [key.call, random.rand.round(3)] }.to_h
+      File.write("cache.json", "#{JSON.pretty_generate(file.sort.to_h)}\n")
+      cache = Judgelint::Cache.new("cache.json")
+      stored = Array.new(700) { [key.call, { "breaks" => random.rand.round(3) }] }.to_h
+      stored[file.keys.first] = 0.5
+      stored.each { |k, value| cache.store(k, value) }
+      cache.store(stored.keys.last, 0.25)
+      cache.save
+
+      expected = file.merge(stored).merge(stored.keys.last => 0.25)
+      assert_equal "#{JSON.pretty_generate(expected.sort.to_h)}\n", File.read("cache.json")
     end
   end
 

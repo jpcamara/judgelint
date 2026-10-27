@@ -131,6 +131,19 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_a_file_deleted_after_planning_is_not_sent
+    in_project do
+      write("app/a.rb", "x\n")
+      client = FakeClient.new { 0.1 }
+      runner = runner([rule], client)
+      jobs = runner.plan(["app/a.rb"])
+      File.delete("app/a.rb")
+
+      error = assert_raises(Judgelint::Error) { runner.execute(jobs) }
+      assert_equal "app/a.rb changed while judgelint ran; run it again", error.message
+    end
+  end
+
   def test_files_with_the_same_shape_share_their_questions
     in_project do
       write("app/a.rb", "x\n")

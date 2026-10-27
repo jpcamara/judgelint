@@ -46,7 +46,13 @@ module Judgelint
         state = self.state
         return state if Digest::SHA256.hexdigest(JSON.generate(state)) == @state_digest
 
-        raise Error, "#{@source.path} changed while judgelint ran; run it again"
+        raise changed
+      rescue SystemCallError
+        raise changed
+      end
+
+      def changed
+        Error.new("#{@source.path} changed while judgelint ran; run it again")
       end
 
       # A model's answers, or nil for none.
