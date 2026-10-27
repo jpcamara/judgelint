@@ -20,12 +20,13 @@ module Judgelint
       attr_accessor :skipped
 
       # The state is the whole file, and a run plans every file before it
-      # sends one, so it's built when needed rather than kept. Its hash, which
+      # sends one, so it's kept only while the job is planned. Its hash, which
       # every question's cache key needs, is kept.
       def initialize(source, questions, prose: nil, expected: nil)
         @source = source
         @prose = prose
-        @state_digest = Digest::SHA256.hexdigest(JSON.generate(state))
+        @planning = read_state
+        @state_digest = Digest::SHA256.hexdigest(JSON.generate(@planning))
         @questions = questions
         @answers = nil # model index => {question key => probability or nil}, once there are any
         @requests = []
@@ -34,16 +35,14 @@ module Judgelint
         @verdicts = nil
       end
 
-      # Rules from a spec read its prose alongside the file, as team_rules.
+      # The state to measure or send, which must be the one planned. While
+      # the job is planned it's the state that was hashed; after that the
+      # file is read again, and one that changed since would be cached under
+      # the wrong contents.
       def state
-        @prose ? { "team_rules" => @prose, "file" => @source.state } : @source.state
-      end
+        return @planning if @planning
 
-      # The state to send, which must be the one planned: the file is read
-      # again, and a file that changed since would be cached under the wrong
-      # contents.
-      def planned_state
-        state = self.state
+        state = read_state
         return state if Digest::SHA256.hexdigest(JSON.generate(state)) == @state_digest
 
         raise changed
@@ -51,8 +50,9 @@ module Judgelint
         raise changed
       end
 
-      def changed
-        Error.new("#{@source.path} changed while judgelint ran; run it again")
+      # Planning is done: the state is read again when it's sent.
+      def planned
+        @planning = nil
       end
 
       # A model's answers, or nil for none.
@@ -72,6 +72,17 @@ module Judgelint
         @source = nil
         @state_digest = nil
         verdicts
+      end
+
+      private
+
+      # Rules from a spec read its prose alongside the file, as team_rules.
+      def read_state
+        @prose ? { "team_rules" => @prose, "file" => @source.state } : @source.state
+      end
+
+      def changed
+        Error.new("#{@source.path} changed while judgelint ran; run it again")
       end
     end
 
@@ -240,6 +251,7 @@ module Judgelint
       questions = @asked_together[shapes.join("|")] ||= questions if shared
       job = Job.new(source, questions, prose: rules.first&.prose, expected: expected)
       pack(job)
+      job.planned
       job.settle(verdicts(job)) if job.requests.empty?
       job
     end
@@ -340,7 +352,7 @@ module Judgelint
     def ask(job)
       return if job.requests.empty?
 
-      state = job.planned_state
+      state = job.state
       results = Pool.map(job.requests, job.requests.size) do |request|
         @clients[request.model].judge(state, request.questions)
       end

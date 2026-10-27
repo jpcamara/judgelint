@@ -26,8 +26,19 @@ class CacheTest < Minitest::Test
       File.write("cache.json", "#{JSON.pretty_generate(ENTRIES)}\n")
       cache = Judgelint::Cache.new("cache.json")
 
+      refute_empty cache.instance_variable_get(:@places)
       ENTRIES.each { |key, value| value.nil? ? assert_nil(cache.fetch(key)) : assert_equal(value, cache.fetch(key)) }
       ["0" * 64, "b" * 63 + "c", "f" * 64].each { |missing| assert_nil cache.fetch(missing) }
+    end
+  end
+
+  def test_a_file_with_crlf_line_endings_is_read_entry_by_entry
+    in_tmp do
+      File.binwrite("cache.json", "#{JSON.pretty_generate(ENTRIES)}\n".gsub("\n", "\r\n"))
+      cache = Judgelint::Cache.new("cache.json")
+
+      refute_empty cache.instance_variable_get(:@places)
+      ENTRIES.each { |key, value| value.nil? ? assert_nil(cache.fetch(key)) : assert_equal(value, cache.fetch(key)) }
     end
   end
 
@@ -82,6 +93,7 @@ class CacheTest < Minitest::Test
       File.write("cache.json", JSON.generate(ENTRIES.to_a.reverse.to_h))
       cache = Judgelint::Cache.new("cache.json")
 
+      assert_empty cache.instance_variable_get(:@places)
       assert_equal ENTRIES["b" * 64], cache.fetch("b" * 64)
       cache.store("f" * 64, 1.0)
       cache.save

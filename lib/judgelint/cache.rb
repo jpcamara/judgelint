@@ -12,9 +12,9 @@ module Judgelint
   # cache, already in the form it writes. A run saves its cache once, when
   # it's done.
   class Cache
-    # A line that starts an entry: its key, then its value or the value's
-    # first line.
-    ENTRY = /\A  "([0-9a-f]{64})": (.*)\n\z/
+    # A line that starts an entry, without its line ending: its key, then
+    # its value or the value's first line.
+    ENTRY = /\A  "([0-9a-f]{64})": (.*)\z/
     KEY_SIZE = 64
     # Where a value starts in its entry's first line.
     VALUE_AT = 70
@@ -230,7 +230,8 @@ module Judgelint
     end
 
     # Indexes a file in the form #save writes, with its keys in order, parsing
-    # each value once to check it. False for anything else.
+    # each value once to check it. Lines may end in CRLF, as #save writes them
+    # on Windows. False for anything else.
     def index
       offset = 0
       last = nil # the latest key
@@ -242,28 +243,31 @@ module Judgelint
       @file.each_line do |line|
         return false if closed
 
+        if open && line.start_with?("    ")
+          text << line
+          offset += line.bytesize
+          next
+        end
+
+        bare = line.chomp
         if offset.zero?
-          return false unless line == "{\n" || line == "{}\n"
+          return false unless bare == "{" || bare == "{}"
 
-          closed = line == "{}\n"
+          closed = bare == "{}"
         elsif open
-          if line.start_with?("    ")
-            text << line
-          elsif line == "  }\n" || line == "  },\n"
-            text << "  }"
-            return false unless indexed(last, start, text)
+          return false unless bare == "  }" || bare == "  },"
 
-            open = false
-            ended = line == "  }\n"
-          else
-            return false
-          end
+          text << "  }"
+          return false unless indexed(last, start, text)
+
+          open = false
+          ended = bare == "  }"
         elsif ended
-          return false unless line == "}\n"
+          return false unless bare == "}"
 
           closed = true
         else
-          match = ENTRY.match(line)
+          match = ENTRY.match(bare)
           return false unless match && (last.nil? || last < match[1])
 
           last = match[1]
@@ -271,7 +275,7 @@ module Judgelint
           start = offset + VALUE_AT
           if rest == "{"
             open = true
-            text = +"{\n"
+            text = line.byteslice(VALUE_AT, line.bytesize - VALUE_AT)
           else
             ended = !rest.end_with?(",")
             return false unless indexed(last, start, ended ? rest : rest.delete_suffix(","))
