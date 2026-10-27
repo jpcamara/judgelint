@@ -13,8 +13,9 @@ module Judgelint
       end
     end
 
+    # Rules from one spec share their patterns, so each is globbed once.
     def self.expand(patterns)
-      patterns.flat_map { |pattern| glob(pattern) }.select { |path| File.file?(path) }.uniq.sort
+      patterns.uniq.flat_map { |pattern| glob(pattern) }.select { |path| File.file?(path) }.uniq.sort
     end
 
     # Dir.glob, except that a symlink to itself is skipped. Dir.glob raises
@@ -44,6 +45,7 @@ module Judgelint
       listed = project_files
       return expand(patterns) if listed.nil?
 
+      patterns = patterns.uniq
       listed.select { |path| match_any?(patterns, path) && File.file?(path) }
     end
 

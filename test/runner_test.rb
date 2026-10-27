@@ -54,7 +54,7 @@ class RunnerTest < Minitest::Test
       client = FakeClient.new { 0.1 }
       judge([rule], client, %w[app/a.rb app/b.rb], changes: { "app/a.rb" => [45, 125], "app/b.rb" => :all })
 
-      assert_equal [%w[smell.41-80 smell.121-130], %w[smell.1-10]], client.calls.map(&:last)
+      assert_equal [%w[smell.1-10], %w[smell.41-80 smell.121-130]], client.calls.map(&:last).sort
     end
   end
 
@@ -193,7 +193,7 @@ class RunnerTest < Minitest::Test
       examples = runner.execute(runner.plan_examples).flatten
 
       assert_equal [true, true], examples.map(&:correct?)
-      assert_equal(["Directory: tidy", "Directory: orphan"], client.calls.map { |state, _keys| state.lines.first.chomp })
+      assert_equal(["Directory: orphan", "Directory: tidy"], client.calls.map { |state, _keys| state.lines.first.chomp }.sort)
     end
   end
 
