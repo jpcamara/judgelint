@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.10 (2026-10-27)
+
+- `check` and `test` use far less memory and run faster. Against 0.1.9 on
+  a synthetic project, the native binary uses 84–89% less memory, and
+  Ruby 73–87% less. Both are 23–51% faster.
+  - Files of the same shape share their questions.
+  - A planned file is read again when its request is sent instead of being
+    kept. A file that changed in between stops the run with an error.
+  - The cache stays on disk and is looked up an entry at a time.
+  - Connections to the model are kept open between requests.
+  - Each glob pattern is walked once.
+- Output and cache files are unchanged.
+
 ## 0.1.9 (2026-10-27)
 
 - `check` uses much less memory on large projects. On 50,000 files its
