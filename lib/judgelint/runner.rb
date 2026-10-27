@@ -12,9 +12,11 @@ module Judgelint
   # average. A rule's verdict is its worst window.
   class Runner
     # One file's work: the questions to ask, each model's answers (from the
-    # cache or the model), and the requests still to send.
+    # cache or the model), and the requests still to send. A job the cache
+    # answers in full is settled as soon as it's planned, and any other once
+    # it's sent.
     class Job
-      attr_reader :source, :state_digest, :questions, :answers, :requests, :expected
+      attr_reader :source, :state_digest, :questions, :requests, :expected, :verdicts
       attr_accessor :skipped
 
       # The state is the whole file, and a run plans every file before it
@@ -25,15 +27,45 @@ module Judgelint
         @prose = prose
         @state_digest = Digest::SHA256.hexdigest(JSON.generate(state))
         @questions = questions
-        @answers = {} # model index => {question key => probability or nil}
+        @answers = nil # model index => {question key => probability or nil}, once there are any
         @requests = []
         @expected = expected
         @skipped = false
+        @verdicts = nil
       end
 
       # Rules from a spec read its prose alongside the file, as team_rules.
       def state
         @prose ? { "team_rules" => @prose, "file" => @source.state } : @source.state
+      end
+
+      # The state to send, which must be the one planned: the file is read
+      # again, and a file that changed since would be cached under the wrong
+      # contents.
+      def planned_state
+        state = self.state
+        return state if Digest::SHA256.hexdigest(JSON.generate(state)) == @state_digest
+
+        raise Error, "#{@source.path} changed while judgelint ran; run it again"
+      end
+
+      # A model's answers, or nil for none.
+      def answers(model)
+        @answers && @answers[model]
+      end
+
+      def answer(model, key, probability)
+        @answers ||= {}
+        (@answers[model] ||= {})[key] = probability
+      end
+
+      # Keeps the verdicts and lets go of what made them.
+      def settle(verdicts)
+        @verdicts = verdicts
+        @answers = nil
+        @source = nil
+        @state_digest = nil
+        verdicts
       end
     end
 
@@ -73,6 +105,8 @@ module Judgelint
       @rules = rules
       @clients = clients
       @cache = cache
+      @asked = {} # rule => {shape => questions}
+      @asked_together = {} # the rules' shapes => questions by rule
     end
 
     # +changes+ ({path => lines or :all}, from Changes.since) limits each file
@@ -161,12 +195,11 @@ module Judgelint
       requests.each_with_index.sum { |request, index| request.tokens * prices[index] / 1_000_000.0 }
     end
 
-    # Returns each job's verdicts, in the jobs' order.
+    # Returns each job's verdicts, in the jobs' order. Jobs the cache
+    # settled while planning have them already.
     def execute(jobs)
-      Pool.map(jobs, Config::THREADS) do |job|
-        ask(job)
-        verdicts(job)
-      end
+      Pool.map(jobs.reject(&:verdicts), Config::THREADS) { |job| judge(job) }
+      jobs.map(&:verdicts)
     ensure
       @cache.save
     end
@@ -183,21 +216,45 @@ module Judgelint
 
     def plan_file(source, rules, lines, expected: nil)
       questions = {}
+      shapes = []
+      shared = true
       rules.each do |rule|
         ranges = rule.ranges(source, Config::WINDOW_LINES).select { |first, last| touched?(lines, first, last) }
         next if ranges.empty?
 
-        asked = []
-        ranges.each do |first, last|
-          asked << Question.new(rule, first, last, lines: changed_lines(rule, lines, first, last))
-          asked << where(source, rule, first, last) if where?(source, rule, first, last)
-          asked << Question.new(rule, first, last, kind: :excuse) if source.hinted?(first, last)
+        if rule.directory?
+          questions[rule] = ask_about(source, rule, ranges, lines)
+          shared = false
+        else
+          shape = shape(source, rule, ranges, lines)
+          shapes << "#{@rules.index(rule)}:#{shape}"
+          questions[rule] = (@asked[rule] ||= {})[shape] ||= ask_about(source, rule, ranges, lines)
         end
-        questions[rule] = asked
       end
+      questions = @asked_together[shapes.join("|")] ||= questions if shared
       job = Job.new(source, questions, prose: rules.first&.prose, expected: expected)
       pack(job)
+      job.settle(verdicts(job)) if job.requests.empty?
       job
+    end
+
+    # What decides a rule's questions about a file: its ranges, changed lines
+    # and judgehints. Files that match share their questions, since a run
+    # holds every file it plans. A directory's are its own.
+    def shape(source, rule, ranges, lines)
+      ranges.map do |first, last|
+        "#{first}-#{last}:#{changed_lines(rule, lines, first, last)&.join(',')}:#{source.hinted?(first, last)}"
+      end.join(";")
+    end
+
+    def ask_about(source, rule, ranges, lines)
+      asked = []
+      ranges.each do |first, last|
+        asked << Question.new(rule, first, last, lines: changed_lines(rule, lines, first, last))
+        asked << where(source, rule, first, last) if where?(source, rule, first, last)
+        asked << Question.new(rule, first, last, kind: :excuse) if source.hinted?(first, last)
+      end
+      asked
     end
 
     # Where a bullet is broken is asked over the range's lines or the
@@ -235,12 +292,11 @@ module Judgelint
     # over a model's limit is skipped: it's reported, never sent.
     def pack(job)
       @clients.each_with_index do |client, model|
-        answers = job.answers[model] = {}
         pending = []
         job.questions.each_value do |questions|
           questions.each do |question|
             cached = @cache.fetch(cache_key(question, job, client))
-            cached.nil? ? pending << question : answers[question.key] = cached
+            cached.nil? ? pending << question : job.answer(model, question.key, cached)
           end
         end
         next if pending.empty?
@@ -269,11 +325,16 @@ module Judgelint
       end
     end
 
+    def judge(job)
+      ask(job)
+      job.settle(verdicts(job))
+    end
+
     # Sends every request at once: a file's packed requests and every model's.
     def ask(job)
       return if job.requests.empty?
 
-      state = job.state
+      state = job.planned_state
       results = Pool.map(job.requests, job.requests.size) do |request|
         @clients[request.model].judge(state, request.questions)
       end
@@ -282,7 +343,7 @@ module Judgelint
         request.questions.each do |question|
           probability = results[index][question.key]
           @cache.store(cache_key(question, job, client), probability) unless probability.nil?
-          job.answers[request.model][question.key] = probability
+          job.answer(request.model, question.key, probability)
         end
       end
     end
@@ -310,8 +371,9 @@ module Judgelint
         excuses = []
         spread = {}
         asked.each do |question|
-          job.answers.each_value do |answers|
-            answer = answers[question.key]
+          @clients.each_index do |model|
+            answers = job.answers(model)
+            answer = answers && answers[question.key]
             next if answer.nil?
 
             if question.excuse?

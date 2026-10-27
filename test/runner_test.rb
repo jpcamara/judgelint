@@ -15,8 +15,9 @@ class RunnerTest < Minitest::Test
 
       verdicts = judge(rules, client, %w[app/a.rb app/b.rb])
 
-      assert_equal [%w[smell.1-40 smell.41-50 other.1-40 other.41-50], %w[smell.1-1]], client.calls.map(&:last)
-      assert_equal "Path: app/b.rb\n\n1: fine\n", client.calls.last.first
+      calls = client.calls.sort_by(&:first)
+      assert_equal [%w[smell.1-40 smell.41-50 other.1-40 other.41-50], %w[smell.1-1]], calls.map(&:last)
+      assert_equal "Path: app/b.rb\n\n1: fine\n", calls.last.first
       assert_equal %i[violation violation pass], verdicts.map(&:status)
       assert_equal [[1, 40], [1, 40], [1, 1]], verdicts.map(&:lines)
     end
@@ -95,7 +96,7 @@ class RunnerTest < Minitest::Test
       assert_equal %w[app/features/a app/features/b], verdicts.map(&:path)
       assert_equal %i[violation pass], verdicts.map(&:status)
       assert_nil verdicts.first.lines
-      assert_equal <<~STATE, client.calls.first.first
+      assert_equal <<~STATE, client.calls.map(&:first).find { |state| state.start_with?("Directory: app/features/a") }
         Directory: app/features/a
 
         Path: app/features/a/helper.rb
@@ -115,6 +116,31 @@ class RunnerTest < Minitest::Test
     end
   end
 
+  def test_a_file_that_changes_after_planning_is_not_sent
+    in_project do
+      write("app/a.rb", "x\n")
+      client = FakeClient.new { 0.1 }
+      runner = runner([rule], client, cache: ".judgelint/cache.json")
+      jobs = runner.plan(["app/a.rb"])
+      write("app/a.rb", "y\n")
+
+      error = assert_raises(Judgelint::Error) { runner.execute(jobs) }
+      assert_equal "app/a.rb changed while judgelint ran; run it again", error.message
+      assert_empty client.calls
+      refute File.exist?(".judgelint/cache.json")
+    end
+  end
+
+  def test_files_with_the_same_shape_share_their_questions
+    in_project do
+      write("app/a.rb", "x\n")
+      write("app/b.rb", "y\n")
+      jobs = runner([rule], FakeClient.new { 0.1 }).plan(%w[app/a.rb app/b.rb])
+
+      assert_same jobs[0].questions, jobs[1].questions
+    end
+  end
+
   def test_rules_with_different_context_get_their_own_requests
     in_project do
       write("app/a.rb", "x\n")
@@ -122,9 +148,10 @@ class RunnerTest < Minitest::Test
       client = FakeClient.new { 0.1 }
       judge([rule("plain"), rule("typed", context: ["app/types.rb"])], client, ["app/a.rb"])
 
-      assert_equal [%w[plain.1-1], %w[typed.1-1]], client.calls.map(&:last)
-      assert_includes client.calls.last.first, "Path: app/types.rb"
-      refute_includes client.calls.first.first, "app/types.rb"
+      calls = client.calls.sort_by(&:last)
+      assert_equal [%w[plain.1-1], %w[typed.1-1]], calls.map(&:last)
+      assert_includes calls.last.first, "Path: app/types.rb"
+      refute_includes calls.first.first, "app/types.rb"
     end
   end
 
@@ -416,7 +443,7 @@ class RunnerTest < Minitest::Test
       examples = runner.execute(runner.plan_examples).flatten
 
       assert_equal [true, false, true], examples.map(&:correct?)
-      assert_equal(%w[good.rb nested/also_bad.rb bad.rb], client.calls.map { |state, _keys| state[/Path: (\S+)/, 1] })
+      assert_equal(%w[bad.rb good.rb nested/also_bad.rb], client.calls.map { |state, _keys| state[/Path: (\S+)/, 1] }.sort)
     end
   end
 

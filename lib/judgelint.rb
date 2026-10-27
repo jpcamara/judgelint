@@ -4,7 +4,6 @@ require "json"
 require "yaml"
 require "digest"
 require "fileutils"
-require "net/https"
 require "open3"
 
 require_relative "judgelint/version"

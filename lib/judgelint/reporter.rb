@@ -19,7 +19,7 @@ module Judgelint
 
     def check(verdicts, config:, file_count:, usage:)
       case @format
-      when "json" then json(check_json(verdicts, config, file_count, usage))
+      when "json" then json_with(check_json(verdicts, config, file_count, usage), "results", verdicts, &:to_h)
       when "github" then verdicts.each { |verdict| annotate(verdict) }
       when "sarif" then json(sarif(verdicts))
       else text(verdicts, file_count)
@@ -27,7 +27,7 @@ module Judgelint
     end
 
     def fixtures(examples, usage:)
-      return json(fixtures_json(examples, usage)) if @format == "json"
+      return json_with(fixtures_json(examples, usage), "examples", examples, &:to_h) if @format == "json"
 
       examples.group_by(&:rule).each do |rule, group|
         correct = group.count(&:correct?)
@@ -49,6 +49,21 @@ module Judgelint
 
     def json(data)
       @out.puts JSON.pretty_generate(data)
+    end
+
+    # Prints +data+ with +key+ last, holding +items+ made into hashes, as
+    # JSON.pretty_generate does, but an item at a time: a run's results can
+    # be many.
+    def json_with(data, key, items)
+      head = JSON.pretty_generate(data.merge(key => []))
+      return @out.puts(head) if items.empty?
+
+      @out.write("#{head.delete_suffix("[]\n}")}[")
+      items.each_with_index do |item, index|
+        @out.write(index.zero? ? "\n    " : ",\n    ")
+        @out.write(JSON.pretty_generate(yield(item)).gsub("\n", "\n    "))
+      end
+      @out.write("\n  ]\n}\n")
     end
 
     def text(verdicts, file_count)
@@ -120,8 +135,7 @@ module Judgelint
         "models" => config.models.map(&:label),
         "files" => file_count,
         "summary" => STATUSES.to_h { |status| [status, counts.fetch(status.to_sym, 0)] },
-        "usage" => usage.to_h,
-        "results" => verdicts.map(&:to_h)
+        "usage" => usage.to_h
       }
     end
 
@@ -130,8 +144,7 @@ module Judgelint
         "version" => VERSION,
         "correct" => examples.count(&:correct?),
         "total" => examples.size,
-        "usage" => usage.to_h,
-        "examples" => examples.map(&:to_h)
+        "usage" => usage.to_h
       }
     end
 

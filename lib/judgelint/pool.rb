@@ -3,9 +3,12 @@
 module Judgelint
   # Maps items over a few threads and returns results in the items' order, so
   # output doesn't depend on which request came back first. The first error
-  # is raised once every thread has finished.
+  # is raised once every thread has finished. A single item runs on the
+  # calling thread.
   module Pool
     def self.map(items, size)
+      return items.map { |item| yield(item) } if items.size <= 1
+
       results = Array.new(items.size)
       queue = Queue.new
       items.each_with_index { |item, index| queue << [item, index] }

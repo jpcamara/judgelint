@@ -18,22 +18,29 @@ module Judgelint
       new(dir, shown_as: shown_as, files: files, context: context, directory: true)
     end
 
-    # +text+ is the file's contents when it isn't on disk, like an example in a spec.
-    # Each file is kept as one string, since a run holds every file it plans.
+    # +text+ is the file's contents when it isn't on disk, like an example in a
+    # spec. A file on disk is read again when its state is built rather than
+    # kept, since a run holds every file it plans.
     def initialize(path, shown_as: path, files: [path], context: [], directory: false, text: nil)
       @path = path
       @shown_as = shown_as
       @directory = directory
-      @files = text ? [[path, text]] : files.map { |file| [file, File.read(file)] }
+      @files = directory ? files : nil
+      @text = text
       @context = context
       @line_count = 0
-      @hints = []
-      @files.each do |_file, contents|
-        contents.each_line do |line|
+      @hints = nil
+      self.files.each do |file|
+        contents(file).each_line do |line|
           @line_count += 1
-          @hints << @line_count if HINT.match?(line)
+          (@hints ||= []) << @line_count if HINT.match?(line)
         end
       end
+    end
+
+    # A file's source is the file alone.
+    def files
+      @files || [@path]
     end
 
     def directory?
@@ -43,10 +50,10 @@ module Judgelint
     def state
       body =
         if directory?
-          sections = @files.map { |file, contents| "Path: #{shown(file)}\n\n#{numbered(contents)}" }
+          sections = files.map { |file| "Path: #{shown(file)}\n\n#{numbered(contents(file))}" }
           "Directory: #{shown_as}\n\n#{sections.join("\n")}"
         else
-          "Path: #{shown_as}\n\n#{numbered(@files.first[1])}"
+          "Path: #{shown_as}\n\n#{numbered(contents(@path))}"
         end
       return body if @context.empty?
 
@@ -61,17 +68,29 @@ module Judgelint
 
     # The directory's files as [path, the path the model sees].
     def members
-      @files.map { |file, _contents| [file, shown(file)] }
+      files.map { |file| [file, shown(file)] }
     end
 
     def hinted?(first, last)
-      directory? ? !@hints.empty? : @hints.any? { |line| line.between?(first, last) }
+      return false if @hints.nil?
+
+      directory? || @hints.any? { |line| line.between?(first, last) }
     end
 
     private
 
+    def contents(file)
+      @text || File.read(file)
+    end
+
     def numbered(contents)
-      contents.lines.each_with_index.map { |line, index| "#{index + 1}: #{line.chomp}\n" }.join
+      text = +""
+      number = 0
+      contents.each_line do |line|
+        number += 1
+        text << number.to_s << ": " << line.chomp << "\n"
+      end
+      text
     end
 
     # A file's path inside the directory, as the model sees it.

@@ -14,6 +14,9 @@ module Judgelint
   #
   # A rule written as a question is asked yes or no, as written. Code with a
   # judgehint comment is also asked, yes or no, whether the hint excuses it.
+  #
+  # Files share their questions, so a question works out its wording and
+  # options once, while the run is planned, and keeps them.
   class Question
     BREAKS = "The code clearly breaks the rule."
     FOLLOWS = "The code follows the rule."
@@ -37,7 +40,7 @@ module Judgelint
     end
 
     def places
-      @places || (first..last).map { |line| "L#{line}" }
+      @places ||= (first..last).map { |line| "L#{line}" }
     end
 
     def excuse?
@@ -54,18 +57,22 @@ module Judgelint
     end
 
     def key
-      base = "#{rule.question_key}.#{first}-#{last}"
-      return "#{base}.excused" if excuse?
-      return "#{base}.where" if where?
-
-      base
+      @key ||= begin
+        base = "#{rule.question_key}.#{first}-#{last}"
+        if excuse? then "#{base}.excused"
+        elsif where? then "#{base}.where"
+        else base
+        end
+      end
     end
 
     # A choice's options, as {name => description or nil}.
     def options
-      return places.to_h { |place| [place, nil] } if where?
-
-      { "breaks" => rule.yes_means || BREAKS, "follows" => rule.no_means || FOLLOWS, "not_applicable" => NOT_APPLICABLE }
+      @options ||= if where?
+                     places.to_h { |place| [place, nil] }
+                   else
+                     { "breaks" => rule.yes_means || BREAKS, "follows" => rule.no_means || FOLLOWS, "not_applicable" => NOT_APPLICABLE }
+                   end
     end
 
     # The probability the code breaks the rule, from a verdict's answer: a
@@ -79,16 +86,7 @@ module Judgelint
     # "Answer yes only when..." keeps the model from flagging code the rule
     # doesn't cover.
     def instructions
-      return excuse_instructions if excuse?
-      return where_instructions if where?
-      return "How #{rule.scope == 'file' || lines&.size == 1 ? 'does' : 'do'} #{subject} relate to the following team rule? Rule: #{rule.convention}" if rule.convention
-
-      text = rule.window? ? "Look at #{span} of the file; the rest is context. #{rule.question}" : rule.question
-      return text unless rule.fail_when == "yes"
-
-      scope = { "window" => "those lines do it", "file" => "the code does it", "directory" => "the files do it" }
-              .fetch(rule.scope)
-      "#{text} Answer yes only when #{scope}, not when the question doesn't apply."
+      @instructions ||= instructions_text
     end
 
     def yes_means
@@ -111,6 +109,19 @@ module Judgelint
     end
 
     private
+
+    def instructions_text
+      return excuse_instructions if excuse?
+      return where_instructions if where?
+      return "How #{rule.scope == 'file' || lines&.size == 1 ? 'does' : 'do'} #{subject} relate to the following team rule? Rule: #{rule.convention}" if rule.convention
+
+      text = rule.window? ? "Look at #{span} of the file; the rest is context. #{rule.question}" : rule.question
+      return text unless rule.fail_when == "yes"
+
+      scope = { "window" => "those lines do it", "file" => "the code does it", "directory" => "the files do it" }
+              .fetch(rule.scope)
+      "#{text} Answer yes only when #{scope}, not when the question doesn't apply."
+    end
 
     def subject
       { "window" => "#{span} of the file", "file" => "the file", "directory" => "the files" }.fetch(rule.scope)

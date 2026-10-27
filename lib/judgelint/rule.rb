@@ -72,7 +72,7 @@ module Judgelint
     end
 
     def question_key
-      id.gsub(/[^A-Za-z0-9_]/, "_")
+      @question_key ||= id.gsub(/[^A-Za-z0-9_]/, "_")
     end
 
     def window?

@@ -15,17 +15,24 @@ module Judgelint
   # is :pass or :fail for files under rules/<id>/pass and rules/<id>/fail.
   # Not Data.define: Spinel can't compile a Data or Struct in a program that also uses net/https and json.
   class Verdict
-    attr_reader :rule, :path, :probability, :status, :lines, :line, :file, :expected
+    attr_reader :rule, :path, :probability, :status, :line, :file, :expected
 
+    # The range is kept as two numbers, since a run holds a verdict for every
+    # rule and file.
     def initialize(rule:, path:, probability:, status:, lines: nil, line: nil, file: nil, expected: nil)
       @rule = rule
       @path = path
       @probability = probability
       @status = status
-      @lines = lines
+      @first = lines && lines[0]
+      @last = lines && lines[1]
       @line = line
       @file = file
       @expected = expected
+    end
+
+    def lines
+      @first && [@first, @last]
     end
 
     def as_example(expected)

@@ -24,6 +24,7 @@ module Judgelint
       end
       @usage = usage
       @sleeper = sleeper
+      @question_tokens = {}
       check_settings
     end
 
@@ -44,9 +45,10 @@ module Judgelint
       JSON.generate(payload(state, questions)).bytesize / 3
     end
 
-    # What one more question adds to a request, without serializing the file again.
+    # What one more question adds to a request, without serializing the file
+    # again. Files share their questions, so each is measured once.
     def question_tokens(question)
-      (JSON.generate(@protocol.render(question)).bytesize + question.key.bytesize + 6) / 3
+      @question_tokens[question] ||= (JSON.generate(@protocol.render(question)).bytesize + question.key.bytesize + 6) / 3
     end
 
     def url
@@ -133,8 +135,11 @@ module Judgelint
       end
     end
 
-    # Answers nil after a connection error that's worth another try.
+    # Answers nil after a connection error that's worth another try. The
+    # HTTP stack loads with the first request, so a run the cache answers
+    # never loads it.
     def request(body, attempt)
+      require "net/https"
       uri = URI(url)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = uri.scheme == "https"
