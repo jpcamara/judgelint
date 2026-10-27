@@ -55,6 +55,14 @@ module Judgelint
       end
     end
 
+    # Makes room for about +count+ answers to be stored, so their keys don't
+    # grow a piece at a time.
+    def reserve(count)
+      @lock.synchronize do
+        @stored_keys = String.new(capacity: count * KEY_SIZE) << @stored_keys if @stored_keys.bytesize < count * KEY_SIZE
+      end
+    end
+
     def store(key, yes_probability)
       @lock.synchronize do
         @dirty = true

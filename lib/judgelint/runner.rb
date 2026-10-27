@@ -215,6 +215,7 @@ module Judgelint
     # Returns each job's verdicts, in the jobs' order. Jobs the cache
     # settled while planning have them already.
     def execute(jobs)
+      @cache.reserve(jobs.sum { |job| job.requests.sum { |request| request.questions.size } })
       Pool.map(jobs.reject(&:verdicts), Config::THREADS) { |job| judge(job) }
       jobs.map(&:verdicts)
     ensure

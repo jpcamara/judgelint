@@ -17,22 +17,21 @@ module Judgelint
   class Verdict
     attr_reader :rule, :path, :probability, :status, :line, :file, :expected
 
-    # The range is kept as two numbers, since a run holds a verdict for every
-    # rule and file.
+    # A run holds a verdict for every rule and file, so the range is kept as
+    # one number: its first line, shifted past its last.
     def initialize(rule:, path:, probability:, status:, lines: nil, line: nil, file: nil, expected: nil)
       @rule = rule
       @path = path
       @probability = probability
       @status = status
-      @first = lines && lines[0]
-      @last = lines && lines[1]
+      @range = lines && ((lines[0] << 32) | lines[1])
       @line = line
       @file = file
       @expected = expected
     end
 
     def lines
-      @first && [@first, @last]
+      @range && [@range >> 32, @range & 0xffffffff]
     end
 
     def as_example(expected)

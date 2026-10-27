@@ -26,6 +26,7 @@ module Judgelint
       @sleeper = sleeper
       @question_tokens = {}
       @connections = Queue.new # open, and not in use
+      @lock = Mutex.new
       check_settings
     end
 
@@ -143,7 +144,7 @@ module Judgelint
     # fails.
     def request(body, attempt)
       require "net/http"
-      uri = URI(url)
+      uri = @lock.synchronize { @uri ||= URI(url) }
       require "openssl" if uri.scheme == "https"
       request = Net::HTTP::Post.new(uri.request_uri)
       request["Content-Type"] = "application/json"
