@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.8 (2026-10-26)
+
+- YAML that names a class `safe_load` won't build, like `!ruby/sym` or a
+  date, is a config error instead of a crash with a stack trace. So are
+  YAML aliases.
+
 ## 0.1.7 (2026-10-26)
 
 - A symlink that points to itself no longer crashes a run. Ruby's Dir.glob
