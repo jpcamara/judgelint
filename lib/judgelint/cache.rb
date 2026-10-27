@@ -127,7 +127,7 @@ module Judgelint
     def scratch
       FileUtils.mkdir_p(File.dirname(@path))
       path = "#{@path}.#{Process.pid}.answers"
-      file = File.open(path, "w+")
+      file = File.open(path, "w+b")
       begin
         File.delete(path)
       rescue SystemCallError

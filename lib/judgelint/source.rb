@@ -19,8 +19,9 @@ module Judgelint
     end
 
     # +text+ is the file's contents when it isn't on disk, like an example in a
-    # spec. A file on disk is read again when its state is built rather than
-    # kept, since a run holds every file it plans.
+    # spec. A file on disk is read once to plan it, and its first state is
+    # built from that read, so the two agree. After that it's read again
+    # rather than kept, since a run holds every file it plans.
     def initialize(path, shown_as: path, files: [path], context: [], directory: false, text: nil)
       @path = path
       @shown_as = shown_as
@@ -30,8 +31,9 @@ module Judgelint
       @context = context
       @line_count = 0
       @hints = nil
-      self.files.each do |file|
-        contents(file).each_line do |line|
+      @read = self.files.map { |file| contents(file) }
+      @read.each do |contents|
+        contents.each_line do |line|
           @line_count += 1
           (@hints ||= []) << @line_count if HINT.match?(line)
         end
@@ -48,12 +50,14 @@ module Judgelint
     end
 
     def state
+      read = @read || files.map { |file| contents(file) }
+      @read = nil
       body =
         if directory?
-          sections = files.map { |file| "Path: #{shown(file)}\n\n#{numbered(contents(file))}" }
+          sections = files.each_with_index.map { |file, index| "Path: #{shown(file)}\n\n#{numbered(read[index])}" }
           "Directory: #{shown_as}\n\n#{sections.join("\n")}"
         else
-          "Path: #{shown_as}\n\n#{numbered(contents(@path))}"
+          "Path: #{shown_as}\n\n#{numbered(read[0])}"
         end
       return body if @context.empty?
 
