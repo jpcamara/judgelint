@@ -55,9 +55,10 @@ module Judgelint
       nil
     end
 
-    # A NUL byte in the first 8 KB, as git decides.
-    def self.binary?(path)
-      File.open(path, "rb") { |file| file.read(8000).to_s.include?("\0") }
+    # A NUL byte in the first 8 KB, as git decides. Every file is checked, so
+    # a caller can pass a +buffer+ to read into each time.
+    def self.binary?(path, buffer = +"")
+      File.open(path, "rb") { |file| file.read(8000, buffer).to_s.include?("\0") }
     end
 
     # Files named on the command line, with directories expanded.

@@ -140,6 +140,43 @@ class CacheTest < Minitest::Test
     end
   end
 
+  def test_keys_that_start_alike_are_told_apart
+    entries = %w[1 5 9].to_h { |last| ["#{'7' * 63}#{last}", last.to_i] }
+    in_tmp do
+      File.write("cache.json", "#{JSON.pretty_generate(entries)}\n")
+      cache = Judgelint::Cache.new("cache.json")
+
+      entries.each { |key, value| assert_equal value, cache.fetch(key) }
+      assert_nil cache.fetch("#{'7' * 63}3")
+    end
+  end
+
+  def test_values_that_only_look_plain_are_still_checked
+    key = "a" * 64
+    ["{\n  \"#{key}\": 01\n}\n",
+     "{\n  \"#{key}\": {\n    \"L1\": 0.5\n    \"L2\": 0.5\n  }\n}\n",
+     "{\n  \"#{key}\": {\n    \"L1\": 0.5,\n  }\n}\n",
+     "{\n  \"#{key}\": {\n    \"L1\": .5\n  }\n}\n",
+     "{\n  \"#{key}\": {\n    \"L1\": NaN\n  }\n}\n"].each do |text|
+      in_tmp do
+        File.write("cache.json", text)
+        error = assert_raises(Judgelint::ConfigError, text) { Judgelint::Cache.new("cache.json") }
+        assert_match(/isn't valid JSON/, error.message)
+      end
+    end
+  end
+
+  def test_names_outside_the_plain_form_are_parsed_and_kept
+    entries = { "a" * 64 => { "caf\u00e9.rb" => 0.5, "say \"hi\"\n" => 0.5 }, "b" * 64 => { "\u2603" => 1.0 } }
+    in_tmp do
+      File.write("cache.json", "#{JSON.pretty_generate(entries)}\n")
+      cache = Judgelint::Cache.new("cache.json")
+
+      refute_empty cache.instance_variable_get(:@places)
+      entries.each { |key, value| assert_equal value, cache.fetch(key) }
+    end
+  end
+
   private
 
   def in_tmp(&block)

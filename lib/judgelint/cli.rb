@@ -160,7 +160,8 @@ module Judgelint
       else
         paths = Glob.files(rules.flat_map(&:paths))
       end
-      paths.select { |path| rules.any? { |rule| !rule.directory? && rule.applies_to?(path) } }.reject { |path| Glob.binary?(path) }
+      buffer = String.new(capacity: 8000)
+      paths.select { |path| rules.any? { |rule| !rule.directory? && rule.applies_to?(path) } }.reject { |path| Glob.binary?(path, buffer) }
     end
 
     # The directories directory rules govern; with paths named, those the

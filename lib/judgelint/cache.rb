@@ -15,6 +15,11 @@ module Judgelint
     # A line that starts an entry, without its line ending: its key, then
     # its value or the value's first line.
     ENTRY = /\A  "([0-9a-f]{64})": (.*)\z/
+    # Values in the plain form #save writes, which parse without being
+    # parsed: a number or literal, or a line of a hash of them with an ASCII
+    # name. Anything else is parsed to check it.
+    SCALAR = /\A(?:-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|null|true|false)\z/
+    MEMBER = %r{\A    "(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\["\\/bfnrt])*": (?:-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|null|true|false),?\r?\n\z}
     KEY_SIZE = 64
     # Where a value starts in its entry's first line.
     VALUE_AT = 70
@@ -54,7 +59,7 @@ module Judgelint
       @lock.synchronize do
         @dirty = true
         if @path
-          text = JSON.pretty_generate(yes_probability)
+          text = indented(yes_probability)
           @scratch ||= scratch
           @stored_keys << key
           @stored_places << place(@scratch_size, text.bytesize)
@@ -170,10 +175,17 @@ module Judgelint
       out.write(count.zero? ? "{}\n" : "\n}\n")
     end
 
+    # +text+ is the value, indented to sit in the file's object.
     def entry(out, count, key, text)
-      out.write(count.zero? ? "{\n" : ",\n")
-      out.write("  #{JSON.generate(key)}: #{text.gsub("\n", "\n  ")}")
+      out.write(count.zero? ? "{\n  " : ",\n  ")
+      out.write(JSON.generate(key))
+      out.write(": ")
+      out.write(text)
       count + 1
+    end
+
+    def indented(value)
+      JSON.pretty_generate(value).gsub("\n", "\n  ")
     end
 
     def kept_key(whole, index)
@@ -181,7 +193,7 @@ module Judgelint
     end
 
     def kept_text(whole, index)
-      JSON.pretty_generate(whole.empty? ? read(@file, @places[index]) : @entries[whole[index]])
+      indented(whole.empty? ? read(@file, @places[index]) : @entries[whole[index]])
     end
 
     # The answers stored this run, by the first two hex digits of their keys:
@@ -229,22 +241,24 @@ module Judgelint
       raise ConfigError, "#{@path} isn't valid JSON; delete it to start over"
     end
 
-    # Indexes a file in the form #save writes, with its keys in order, parsing
-    # each value once to check it. Lines may end in CRLF, as #save writes them
-    # on Windows. False for anything else.
+    # Indexes a file in the form #save writes, with its keys in order,
+    # checking that each value parses. Lines may end in CRLF, as #save writes
+    # them on Windows. False for anything else.
     def index
       offset = 0
       last = nil # the latest key
       open = false # inside a value that spans lines
       start = 0
-      text = +""
+      plain = false # the open value's lines are all plain so far
+      comma = true # the open value's last line ended in a comma
       ended = false # read the entry without a comma
       closed = false # read the final brace
       @file.each_line do |line|
         return false if closed
 
         if open && line.start_with?("    ")
-          text << line
+          plain &&= comma && line.match?(MEMBER)
+          comma = line.end_with?(",\n", ",\r\n")
           offset += line.bytesize
           next
         end
@@ -256,9 +270,7 @@ module Judgelint
           closed = bare == "{}"
         elsif open
           return false unless bare == "  }" || bare == "  },"
-
-          text << "  }"
-          return false unless indexed(last, start, text)
+          return false unless indexed(last, start, offset + 3 - start, plain && !comma)
 
           open = false
           ended = bare == "  }"
@@ -275,10 +287,12 @@ module Judgelint
           start = offset + VALUE_AT
           if rest == "{"
             open = true
-            text = line.byteslice(VALUE_AT, line.bytesize - VALUE_AT)
+            plain = true
+            comma = true
           else
             ended = !rest.end_with?(",")
-            return false unless indexed(last, start, ended ? rest : rest.delete_suffix(","))
+            value = ended ? rest : rest.delete_suffix(",")
+            return false unless indexed(last, start, value.bytesize, value.match?(SCALAR), value)
           end
         end
         offset += line.bytesize
@@ -286,10 +300,12 @@ module Judgelint
       closed
     end
 
-    def indexed(key, start, text)
-      JSON.parse(text)
+    # Keeps +key+'s place, once its value is known to parse. +text+ is the
+    # value when it's at hand.
+    def indexed(key, start, length, plain, text = nil)
+      JSON.parse(text || @file.pread(length, start)) unless plain
       @keys << key
-      @places << place(start, text.bytesize)
+      @places << place(start, length)
       true
     rescue JSON::ParserError
       false

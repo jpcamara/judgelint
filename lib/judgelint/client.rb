@@ -25,6 +25,7 @@ module Judgelint
       @usage = usage
       @sleeper = sleeper
       @question_tokens = {}
+      @connections = Queue.new # open, and not in use
       check_settings
     end
 
@@ -137,22 +138,28 @@ module Judgelint
 
     # Answers nil after a connection error that's worth another try. The
     # HTTP stack loads with the first request, so a run the cache answers
-    # never loads it.
+    # never loads it, and TLS only for an https endpoint. A connection is
+    # kept for the next request, from any thread, unless the request on it
+    # fails.
     def request(body, attempt)
-      require "net/https"
+      require "net/http"
       uri = URI(url)
-      http = Net::HTTP.new(uri.host, uri.port)
-      http.use_ssl = uri.scheme == "https"
-      http.open_timeout = Endpoint::TIMEOUT
-      http.read_timeout = Endpoint::TIMEOUT
-
+      require "openssl" if uri.scheme == "https"
       request = Net::HTTP::Post.new(uri.request_uri)
       request["Content-Type"] = "application/json"
       request["Accept"] = "application/json"
       authorize(request)
       @endpoint.headers.each { |name, value| request[name.to_s] = Config.expand(value.to_s) }
       request.body = body
-      http.request(request)
+      http = connection(uri)
+      begin
+        response = http.request(request)
+      rescue StandardError
+        http.finish if http.started?
+        raise
+      end
+      @connections << http
+      response
     rescue Judgelint::Error
       raise
     rescue StandardError => e
@@ -163,6 +170,17 @@ module Judgelint
 
       @sleeper.call(2.0**attempt)
       nil
+    end
+
+    # One kept from an earlier request, or a new one.
+    def connection(uri)
+      @connections.pop(true)
+    rescue ThreadError
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = uri.scheme == "https"
+      http.open_timeout = Endpoint::TIMEOUT
+      http.read_timeout = Endpoint::TIMEOUT
+      http.start
     end
 
     def authorize(request)

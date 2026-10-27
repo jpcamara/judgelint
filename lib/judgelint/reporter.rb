@@ -52,18 +52,36 @@ module Judgelint
     end
 
     # Prints +data+ with +key+ last, holding +items+ made into hashes, as
-    # JSON.pretty_generate does, but an item at a time: a run's results can
-    # be many.
+    # JSON.pretty_generate does, but a value at a time: a run's results can
+    # be many. An item's values are scalars, or lists of them.
     def json_with(data, key, items)
       head = JSON.pretty_generate(data.merge(key => []))
       return @out.puts(head) if items.empty?
 
       @out.write("#{head.delete_suffix("[]\n}")}[")
       items.each_with_index do |item, index|
-        @out.write(index.zero? ? "\n    " : ",\n    ")
-        @out.write(JSON.pretty_generate(yield(item)).gsub("\n", "\n    "))
+        @out.write(index.zero? ? "\n    {" : ",\n    {")
+        position = 0
+        yield(item).each do |name, value|
+          @out.write(position.zero? ? "\n      " : ",\n      ")
+          @out.write(JSON.generate(name))
+          @out.write(": ")
+          json_value(value)
+          position += 1
+        end
+        @out.write("\n    }")
       end
       @out.write("\n  ]\n}\n")
+    end
+
+    def json_value(value)
+      return @out.write(JSON.generate(value)) unless value.is_a?(Array) && !value.empty?
+
+      value.each_with_index do |element, position|
+        @out.write(position.zero? ? "[\n        " : ",\n        ")
+        @out.write(JSON.generate(element))
+      end
+      @out.write("\n      ]")
     end
 
     def text(verdicts, file_count)
