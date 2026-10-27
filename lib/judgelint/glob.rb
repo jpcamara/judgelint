@@ -14,7 +14,27 @@ module Judgelint
     end
 
     def self.expand(patterns)
-      patterns.flat_map { |pattern| Dir.glob(pattern) }.select { |path| File.file?(path) }.uniq.sort
+      patterns.flat_map { |pattern| glob(pattern) }.select { |path| File.file?(path) }.uniq.sort
+    end
+
+    # Dir.glob, except that a symlink to itself is skipped. Dir.glob raises
+    # ELOOP when a pattern looks inside one, so the pattern is then globbed a
+    # segment at a time, entering only directories that resolve.
+    def self.glob(pattern)
+      Dir.glob(pattern)
+    rescue Errno::ELOOP
+      parts = pattern.split("/")
+      found = [""]
+      until parts.empty?
+        part = parts.shift
+        part = "#{part}/#{parts.shift}" if part == "**" && !parts.empty?
+        found = found.flat_map do |dir|
+          next [] unless dir.empty? || File.directory?(dir)
+
+          Dir.glob(dir.empty? ? part : File.join(dir, part))
+        end
+      end
+      found
     end
 
     # The files to check: in a git repository, those git tracks or would add,

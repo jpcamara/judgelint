@@ -89,7 +89,7 @@ module Judgelint
 
     # The directories a directory rule governs.
     def directories
-      paths.flat_map { |pattern| Dir.glob(pattern) }.select { |path| File.directory?(path) && applies_to?(path) }.uniq.sort
+      paths.flat_map { |pattern| Glob.glob(pattern) }.select { |path| File.directory?(path) && applies_to?(path) }.uniq.sort
     end
 
     # The ranges to ask about: windows of +size+ lines, or the whole file.

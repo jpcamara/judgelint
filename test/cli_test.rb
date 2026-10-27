@@ -178,6 +178,19 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_a_symlink_to_itself_doesnt_stop_a_check
+    in_smelly_project do
+      write_rule("smell", extra: "context: [\"app/*/*\"]")
+      File.symlink("loop", "app/loop")
+      runners.each do |name, run|
+        status, out, = run.call(["check"])
+
+        assert_equal 1, status, name
+        assert_match(/^2 files, 1 violations$/, out, name)
+      end
+    end
+  end
+
   def test_pr_finds_the_base_branch_and_fetches_it
     in_smelly_project do |dir|
       git_repo
