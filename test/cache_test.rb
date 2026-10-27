@@ -88,6 +88,19 @@ class CacheTest < Minitest::Test
     end
   end
 
+  def test_a_saved_cache_can_be_used_again
+    in_tmp do
+      cache = Judgelint::Cache.new("cache.json")
+      cache.store("a" * 64, 0.5)
+      cache.save
+      cache.store("b" * 64, 0.25)
+
+      assert_equal 0.5, cache.fetch("a" * 64)
+      cache.save
+      assert_equal "#{JSON.pretty_generate({ 'a' * 64 => 0.5, 'b' * 64 => 0.25 })}\n", File.read("cache.json")
+    end
+  end
+
   def test_a_file_in_another_form_is_read_whole_and_saved_in_key_order
     in_tmp do
       File.write("cache.json", JSON.generate(ENTRIES.to_a.reverse.to_h))

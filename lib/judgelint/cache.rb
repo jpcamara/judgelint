@@ -9,8 +9,8 @@ module Judgelint
   # every entry and keeps its key and where it is, and a lookup finds the
   # key by binary search and reads that entry back. Any other JSON object is
   # read whole. New answers wait for #save in a scratch file beside the
-  # cache, already in the form it writes. A run saves its cache once, when
-  # it's done.
+  # cache, already in the form it writes. A cache used again after it's saved
+  # reads its new file first.
   class Cache
     # A line that starts an entry, without its line ending: its key, then
     # its value or the value's first line.
@@ -35,6 +35,7 @@ module Judgelint
       @stored_keys = +"" # the keys of answers stored this run, end to end, in the order stored
       @stored_places = [] # the place of each in the scratch file
       @dirty = false
+      @saved = false
       @lock = Mutex.new
       load_entries
     end
@@ -45,6 +46,7 @@ module Judgelint
 
     def fetch(key)
       @lock.synchronize do
+        reload if @saved
         if (stored = stored(key))
           read(@scratch, @stored_places[stored])
         elsif (found = find(key))
@@ -59,12 +61,16 @@ module Judgelint
     # grow a piece at a time.
     def reserve(count)
       @lock.synchronize do
+        return unless @path
+
+        reload if @saved
         @stored_keys = String.new(capacity: count * KEY_SIZE) << @stored_keys if @stored_keys.bytesize < count * KEY_SIZE
       end
     end
 
     def store(key, yes_probability)
       @lock.synchronize do
+        reload if @saved
         @dirty = true
         if @path
           text = indented(yes_probability)
@@ -92,6 +98,7 @@ module Judgelint
         close
         File.rename(temp, @path)
         @dirty = false
+        @saved = true
       end
     end
 
@@ -148,6 +155,18 @@ module Judgelint
       end
       @scratch_size = 0
       file
+    end
+
+    def reload
+      @saved = false
+      @keys = +""
+      @places = []
+      @entries = {}
+      @stored_keys = +""
+      @stored_places = []
+      @scratch = nil
+      @scratch_path = nil
+      load_entries
     end
 
     # The file can't be replaced while it's open everywhere.
