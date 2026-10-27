@@ -52,7 +52,10 @@ module Judgelint
     raise ConfigError, "#{path} must be a mapping" unless data.is_a?(Hash)
 
     data
-  rescue Psych::SyntaxError => e
+  rescue Psych::AliasesNotEnabled
+    raise ConfigError, "#{path}: YAML aliases aren't supported"
+  rescue Psych::Exception => e
+    # Bad syntax, or a tag naming a class safe_load won't build.
     raise ConfigError, "#{path}: #{e.message}"
   end
 end

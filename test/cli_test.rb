@@ -191,6 +191,26 @@ class CLITest < Minitest::Test
     end
   end
 
+  def test_yaml_a_rule_cant_load_is_a_config_error
+    in_project do
+      write("app/a.rb", "x\n")
+      {
+        "severity: !ruby/sym warning" => "CONVENTIONS.md: Tried to load unspecified class: Symbol",
+        "severity: !!timestamp 2020-01-01" => "CONVENTIONS.md: Tried to load unspecified class: Date",
+        "excludes: !!set {app/a.rb: }" => "CONVENTIONS.md: Tried to load unspecified class: Psych::Set",
+        "x: &a 1\ny: *a" => "CONVENTIONS.md: YAML aliases aren't supported"
+      }.each do |yaml, message|
+        write("CONVENTIONS.md", "---\npaths: [\"app/*.rb\"]\n#{yaml}\n---\n- **Keep it short.**\n")
+        runners.each do |name, run|
+          status, _out, err = run.call(["rules"])
+
+          assert_equal 2, status, "#{name}: #{yaml}"
+          assert_match(/\Ajudgelint: #{Regexp.escape(message)}$/, err, "#{name}: #{yaml}")
+        end
+      end
+    end
+  end
+
   def test_pr_finds_the_base_branch_and_fetches_it
     in_smelly_project do |dir|
       git_repo
