@@ -7,8 +7,8 @@ native = File.expand_path("../libexec/judgelint", __dir__)
 exec(native, *ARGV) if File.executable?(native)
 
 abort <<~TEXT
-  judgelint has no build for #{RUBY_PLATFORM}, only for macOS and Linux on arm64
-  and x86_64. With Rust installed, build it from source:
+  This judgelint gem has no binary for #{RUBY_PLATFORM}. The binaries are for
+  macOS and Linux on arm64 and x86_64. With Rust installed, build it instead:
 
     cargo install --git https://github.com/jpcamara/judgelint
 TEXT
