@@ -62,7 +62,7 @@ expected="$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d " " -f 1)"
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 "$tmp/judgelint" --version >/dev/null 2>&1 ||
-  fail "the binary doesn't run here (on Linux it needs glibc 2.35 or newer); build it from source: cargo install --git https://github.com/$repo"
+  fail "the binary doesn't run here (on Linux it needs glibc 2.34 or newer); build it from source: cargo install --git https://github.com/$repo"
 mkdir -p "$dir"
 cp "$tmp/judgelint" "$dir/judgelint"
 chmod 755 "$dir/judgelint"
