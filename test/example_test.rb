@@ -74,9 +74,6 @@ class ExampleTest < Minitest::Test
   private
 
   def runners
-    runners = { "exe" => ["ruby", "-I", File.join(ROOT, "lib"), File.join(ROOT, "exe/judgelint")] }
-    binary = ENV.fetch("JUDGELINT_BINARY", nil)
-    runners["spinel"] = [binary] if binary
-    runners
+    { "rust" => [BINARY] }
   end
 end

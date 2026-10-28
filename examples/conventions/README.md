@@ -40,6 +40,6 @@ The first draft of the `t()` rule flagged `<h2>{user.name}</h2>` in
 `ProfileCard.tsx`. Adding "Values from data, like `user.name`, aren't text we
 write" to the bullet fixed it.
 
-The answers are cached in each folder's `.judgelint/cache.json`, so both
+The answers are cached in each folder's `.judgelint/cache.bin`, so both
 commands replay without an API key. `test/example_test.rb` checks the results
 above.

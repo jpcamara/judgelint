@@ -56,10 +56,10 @@ version.
 
 ## Running it
 
-The answers are cached in `.judgelint/cache.json`, so running `judgelint` in
+The answers are cached in `.judgelint/cache.bin`, so running `judgelint` in
 this directory replays them without an API key. `rake example` asks Jev again
 and compares the result with `expected.json`. `test/example_test.rb` replays
-the cache through the gem and the binary and checks the same thing.
+the cache and checks the same thing.
 
 ## Credits
 
