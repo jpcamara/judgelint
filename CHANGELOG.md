@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-10-28)
 
 - judgelint is written in Rust now. The gem carries the binary for macOS and
   Linux on arm64 and x86_64. On any other platform the gem says how to build
