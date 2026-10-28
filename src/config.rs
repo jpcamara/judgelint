@@ -187,7 +187,7 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    fn new(entry: Value) -> Result<Endpoint> {
+    pub fn new(entry: Value) -> Result<Endpoint> {
         let settings = match entry {
             Value::String(text) => {
                 let (provider, model) = text.split_once(':').unwrap_or((&text, ""));
@@ -245,5 +245,104 @@ impl Endpoint {
     pub fn api_key(&self) -> Option<String> {
         let name = self.api_key_env.as_deref().filter(|n| !n.is_empty())?;
         std::env::var(name).ok().filter(|key| !key.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::testing::TempDir;
+
+    /// The config a .judgelint.yml of +yaml+ gives, with --model +model+.
+    fn load(yaml: &str, model: Option<&str>) -> Result<Config> {
+        let dir = TempDir::new();
+        Config::load(Some(&dir.write(FILE, yaml)), model)
+    }
+
+    fn labels(config: &Config) -> Vec<String> {
+        config.models.iter().map(Endpoint::label).collect()
+    }
+
+    fn close(a: f64, b: f64) -> bool {
+        (a - b).abs() < 1e-9
+    }
+
+    #[test]
+    fn defaults_to_jev_on_typesafe() {
+        let config = load("", None).unwrap();
+        let jev = &config.models[0];
+        assert_eq!(labels(&config), ["typesafe:jev-latest"]);
+        assert_eq!(jev.api_base.as_deref(), Some("https://api.typesafe.ai"));
+        assert_eq!(jev.api_key_env.as_deref(), Some("TYPESAFE_API_KEY"));
+        assert_eq!(jev.price_per_million, Some(0.042));
+        assert!(close(config.threshold, 0.7) && close(config.warn_at(), 0.4) && close(config.max_cost_usd, 1.0));
+    }
+
+    #[test]
+    fn models_as_provider_and_model() {
+        let config =
+            load("models: [typesafe, \"cloudflare:clef\", \"openrouter:typesafe/jev-1.13\"]\nthreshold: 0.6\n", None)
+                .unwrap();
+        assert_eq!(labels(&config), ["typesafe:jev-latest", "cloudflare:clef", "openrouter:typesafe/jev-1.13"]);
+        assert!(close(config.threshold, 0.6) && close(config.warn_at(), 0.3));
+    }
+
+    #[test]
+    fn the_model_flag_replaces_the_files_models() {
+        let config = load("models: [typesafe, cloudflare]\nthreshold: 0.6\n", Some("openai")).unwrap();
+        assert_eq!(labels(&config), ["openai:gpt-6-luna"]);
+        assert!(close(config.threshold, 0.6));
+    }
+
+    #[test]
+    fn a_custom_endpoint() {
+        let custom = Endpoint::new(json!({
+            "api_base": "https://gateway.example.com", "model": "decider", "auth": "none",
+            "protocol": "decisions", "price_per_million": 0.5, "batch_size": 8,
+        }))
+        .unwrap();
+        assert_eq!(custom.label(), "custom:decider");
+        assert_eq!((custom.protocol, custom.auth.as_str(), custom.batch_size), (Protocol::Decisions, "none", 8));
+        assert_eq!(custom.price_per_million, Some(0.5));
+    }
+
+    #[test]
+    fn presets_fill_protocol_path_auth_and_limits() {
+        let endpoint = |entry| Endpoint::new(entry).unwrap();
+        let openai = endpoint(json!({"provider": "openai"}));
+        assert_eq!(
+            (openai.protocol, openai.path.as_str(), openai.auth.as_str()),
+            (Protocol::Decisions, "/v1/decisions", "bearer")
+        );
+
+        // Perplexity takes System One bodies at /v1/decisions.
+        let perplexity = endpoint(json!({"provider": "perplexity"}));
+        assert_eq!((perplexity.protocol, perplexity.path.as_str()), (Protocol::SystemOne, "/v1/decisions"));
+
+        let cloudflare = endpoint(json!({"provider": "cloudflare"}));
+        assert_eq!(cloudflare.path, "/@cf/cloudflare/{model}");
+        assert_eq!(cloudflare.batch_size, 64);
+        assert!(
+            cloudflare.api_base.unwrap().contains("${CLOUDFLARE_ACCOUNT_ID}"),
+            "the client expands it when it sends"
+        );
+
+        assert_eq!(endpoint(json!({"provider": "typesafe", "model": "some-new-jev"})).price_per_million, None);
+    }
+
+    #[test]
+    fn rejects_unknown_keys_and_bad_values() {
+        for yaml in
+            ["provider: typesafe\n", "threshold: high\n", "threshold: 2\n", "models: []\n", "models: [{modle: x}]\n"]
+        {
+            assert!(load(yaml, None).is_err(), "{yaml}");
+        }
+    }
+
+    #[test]
+    fn numbers_in_exponent_form() {
+        assert!(close(load("max_cost_usd: 1.0e-07\n", None).unwrap().max_cost_usd, 1e-7));
     }
 }

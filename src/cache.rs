@@ -134,12 +134,13 @@ fn index(file: &File) -> Result<(Vec<(Key, u64)>, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::TempDir;
 
     #[test]
     fn stores_reads_and_replaces() {
-        let dir = std::env::temp_dir().join(format!("judgelint-cache-{}", std::process::id()));
-        let path = dir.join("cache.bin");
-        let path = path.to_str().unwrap();
+        let dir = TempDir::new();
+        let path = dir.path("cache.bin");
+        let path = path.as_str();
         let (a, b) = (key("q", "s", "m"), key("q2", "s", "m"));
         let cache = Cache::open(Some(path)).unwrap();
         cache.put(&a, &[0.9]).unwrap();
@@ -156,11 +157,105 @@ mod tests {
         OpenOptions::new().append(true).open(path).unwrap().write_all(&[1, 2, 3]).unwrap();
         let cache = Cache::open(Some(path)).unwrap();
         assert_eq!(cache.get(&a).unwrap(), Some(vec![0.3]));
+        assert_eq!(cache.get(&b).unwrap(), Some(vec![0.1, 0.2, 0.7]));
         cache.put(&b, &[0.5]).unwrap();
         cache.flush().unwrap();
         drop(cache);
         let cache = Cache::open(Some(path)).unwrap();
         assert_eq!(cache.get(&b).unwrap(), Some(vec![0.5]));
-        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_key_is_the_question_state_and_model() {
+        let keys = [key("q", "s", "m"), key("q2", "s", "m"), key("q", "s2", "m"), key("q", "s", "m2")];
+        for (i, a) in keys.iter().enumerate() {
+            assert!(keys[i + 1..].iter().all(|b| a != b));
+        }
+        assert_eq!(key("q", "s", "m"), keys[0]);
+    }
+
+    #[test]
+    fn misses_and_keys_that_start_alike() {
+        let dir = TempDir::new();
+        let path = dir.path("cache.bin");
+        let alike = |last: u8| {
+            let mut key = [7u8; 32];
+            key[31] = last;
+            key
+        };
+        let cache = Cache::open(Some(&path)).unwrap();
+        assert_eq!(cache.get(&alike(1)).unwrap(), None, "nothing saved yet");
+        for last in [1, 5, 9] {
+            cache.put(&alike(last), &[f64::from(last)]).unwrap();
+        }
+        cache.flush().unwrap();
+        drop(cache);
+        let cache = Cache::open(Some(&path)).unwrap();
+        for last in [1, 5, 9] {
+            assert_eq!(cache.get(&alike(last)).unwrap(), Some(vec![f64::from(last)]));
+        }
+        assert_eq!(cache.get(&alike(3)).unwrap(), None);
+        assert_eq!(cache.get(&key("q", "s", "m")).unwrap(), None);
+    }
+
+    #[test]
+    fn the_latest_answer_wins_across_saves() {
+        let dir = TempDir::new();
+        let path = dir.path("cache.bin");
+        let (a, b, c) = (key("a", "s", "m"), key("b", "s", "m"), key("c", "s", "m"));
+        let cache = Cache::open(Some(&path)).unwrap();
+        cache.put(&b, &[0.25]).unwrap();
+        cache.put(&a, &[0.5]).unwrap();
+        cache.put(&b, &[0.75]).unwrap();
+        cache.flush().unwrap();
+        // A saved cache can take more answers.
+        cache.put(&c, &[1.0]).unwrap();
+        cache.flush().unwrap();
+        drop(cache);
+        let cache = Cache::open(Some(&path)).unwrap();
+        assert_eq!(cache.get(&a).unwrap(), Some(vec![0.5]));
+        assert_eq!(cache.get(&b).unwrap(), Some(vec![0.75]));
+        assert_eq!(cache.get(&c).unwrap(), Some(vec![1.0]));
+    }
+
+    #[test]
+    fn many_answers_over_two_runs() {
+        let dir = TempDir::new();
+        let path = dir.path("cache.bin");
+        let cache = Cache::open(Some(&path)).unwrap();
+        for i in 0..300 {
+            cache.put(&key(&i.to_string(), "s", "m"), &[f64::from(i)]).unwrap();
+        }
+        cache.flush().unwrap();
+        drop(cache);
+        let cache = Cache::open(Some(&path)).unwrap();
+        // The second run replaces every tenth answer and adds 700.
+        for i in (0..300).step_by(10).chain(300..1000) {
+            cache.put(&key(&i.to_string(), "s", "m"), &[f64::from(i), 1.0]).unwrap();
+        }
+        cache.flush().unwrap();
+        drop(cache);
+        let cache = Cache::open(Some(&path)).unwrap();
+        for i in 0..1000 {
+            let expected = if i < 300 && i % 10 != 0 { vec![f64::from(i)] } else { vec![f64::from(i), 1.0] };
+            assert_eq!(cache.get(&key(&i.to_string(), "s", "m")).unwrap(), Some(expected), "{i}");
+        }
+    }
+
+    #[test]
+    fn a_file_that_isnt_a_cache_is_an_error() {
+        let dir = TempDir::new();
+        let path = dir.write("cache.bin", "{not json");
+        let error = Cache::open(Some(&path)).err().unwrap();
+        assert!(format!("{error:#}").contains("delete it"), "{error:#}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{not json", "left as it was");
+
+        // An empty file is an empty cache.
+        let path = dir.write("empty.bin", "");
+        let cache = Cache::open(Some(&path)).unwrap();
+        cache.put(&key("q", "s", "m"), &[0.5]).unwrap();
+        cache.flush().unwrap();
+        drop(cache);
+        assert_eq!(Cache::open(Some(&path)).unwrap().get(&key("q", "s", "m")).unwrap(), Some(vec![0.5]));
     }
 }

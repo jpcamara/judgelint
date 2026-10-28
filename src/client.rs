@@ -191,12 +191,99 @@ fn message(detail: &Value) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use serde_json::json;
 
+    use super::*;
+    use crate::providers;
+
+    fn client(entry: Value) -> Result<Client> {
+        Client::new(Endpoint::new(entry)?, Arc::default())
+    }
+
+    // Error bodies from TypeSafe, Celeris, OpenAI, OpenRouter, and Cloudflare,
+    // plus Vercel's and the local proxies' shapes.
     #[test]
     fn details() {
-        assert_eq!(error_detail(br#"{"detail":[{"msg":"a"},{"msg":"b"}]}"#), "a; b");
-        assert_eq!(error_detail(br#"{"error":{"message":"nope"}}"#), "nope");
-        assert_eq!(error_detail(b"plain"), "plain");
+        let shapes = [
+            (
+                r#"{"detail":{"error_type":"authentication_error","message":"Cannot authenticate."}}"#,
+                "Cannot authenticate.",
+            ),
+            (r#"{"detail":[{"loc":["body","bogus"],"msg":"unknown field","type":"value_error"}]}"#, "unknown field"),
+            (r#"{"detail":[{"msg":"a"},{"msg":"b"}]}"#, "a; b"),
+            (r#"{"detail":"bad key"}"#, "bad key"),
+            (
+                r#"{"error":{"message":"The model `nope` does not exist.","type":"invalid_request_error"}}"#,
+                "The model `nope` does not exist.",
+            ),
+            (r#"{"error":{"message":"Model nope/nope does not exist","code":400}}"#, "Model nope/nope does not exist"),
+            (
+                r#"{"errors":[{"message":"AiError: Bad input","code":5006}],"success":false,"result":{}}"#,
+                "AiError: Bad input",
+            ),
+            (r#"{"message":"Unauthorized","error_type":"auth"}"#, "Unauthorized"),
+            (r#"{"error":"invalid model"}"#, "invalid model"),
+            ("<html>Bad Gateway</html>", "<html>Bad Gateway</html>"),
+        ];
+        for (body, message) in shapes {
+            assert_eq!(error_detail(body.as_bytes()), message, "{body}");
+        }
+    }
+
+    #[test]
+    fn says_what_a_preset_still_needs() {
+        let error = |entry| client(entry).err().unwrap().to_string();
+        assert!(
+            error(json!({"provider": "foundry", "model": "m"}))
+                .contains("foundry needs api_base (your Foundry resource endpoint)")
+        );
+        assert!(error(json!({"provider": "ollama"})).contains("ollama needs a model"));
+        assert!(error(json!({"provider": "acme", "model": "m"})).contains("acme needs api_base"));
+    }
+
+    // Every preset resolves to the endpoint its provider documents.
+    #[test]
+    fn preset_urls() {
+        let expected = [
+            ("typesafe", "https://api.typesafe.ai/v1/systemone"),
+            ("openrouter", "https://openrouter.ai/api/v1/systemone"),
+            ("celeris", "https://inference.celeris.ai/celeris-1-decision/v1/systemone"),
+            ("cloudflare", "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"),
+            ("openai", "https://api.openai.com/v1/decisions"),
+            ("perplexity", "https://api.perplexity.ai/v1/decisions"),
+            ("vercel", "https://ai-gateway.vercel.sh/typesafe/v1/systemone"),
+            ("digitalocean", "https://inference.do-ai.run/v1/systemone"),
+            ("upstage", "https://api.upstage.ai/v1/systemone"),
+            ("hanzo", "https://api.hanzo.ai/v1/decisions"),
+            ("foundry", "https://example.services.ai.azure.com/providers/microsoft/v1/systemone"),
+            ("databricks", "https://example.cloud.databricks.com/ai-gateway/typesafe/v1/systemone"),
+            ("ollama", "http://localhost:11434/v1/systemone"),
+            ("llamacpp", "http://localhost:8080/v1/systemone"),
+            ("vllm", "http://localhost:8000/v1/systemone"),
+            ("litellm", "http://localhost:4000/v1/systemone"),
+        ];
+        let mut names: Vec<&str> = providers::all().iter().map(|p| p.name.as_str()).collect();
+        let mut listed: Vec<&str> = expected.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        listed.sort_unstable();
+        assert_eq!(names, listed);
+        for (provider, url) in expected {
+            let mut entry = json!({"provider": provider});
+            match provider {
+                "foundry" => entry["api_base"] = json!("https://example.services.ai.azure.com"),
+                "databricks" => entry["api_base"] = json!("https://example.cloud.databricks.com"),
+                // The test can't set CLOUDFLARE_ACCOUNT_ID for the preset's
+                // ${CLOUDFLARE_ACCOUNT_ID}, so it fills it in.
+                "cloudflare" => {
+                    let base = providers::find("cloudflare").unwrap().api_base.clone().unwrap();
+                    entry["api_base"] = json!(base.replace("${CLOUDFLARE_ACCOUNT_ID}", "acct"));
+                }
+                _ => {}
+            }
+            if providers::find(provider).unwrap().model.is_none() {
+                entry["model"] = json!("m");
+            }
+            assert_eq!(client(entry).unwrap().url().unwrap(), url, "{provider}");
+        }
     }
 }

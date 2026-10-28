@@ -17,6 +17,8 @@ mod rule;
 mod runner;
 mod source;
 mod spec;
+#[cfg(test)]
+mod testing;
 mod usage;
 mod verdict;
 

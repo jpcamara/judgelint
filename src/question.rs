@@ -199,3 +199,77 @@ fn span(first: u32, last: u32, lines: Option<&[u32]>) -> String {
         runs.iter().map(|&(a, b)| if a == b { a.to_string() } else { format!("{a}-{b}") }).collect();
     format!("lines {}", parts.join(", "))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::{bullet, rule};
+
+    fn verdict(rule: &Rule, first: u32, last: u32, lines: Option<Vec<u32>>) -> Question {
+        Question::new(rule, first, last, Kind::Verdict, None, lines)
+    }
+
+    #[test]
+    fn wording() {
+        let window = verdict(&rule("smell", ""), 41, 80, None);
+        assert_eq!(window.key, "smell.41-80");
+        assert_eq!(
+            window.instructions,
+            "Look at lines 41-80 of the file; the rest is context. Does this code smell? \
+             Answer yes only when those lines do it, not when the question doesn't apply."
+        );
+
+        let file = verdict(&rule("smell", "scope: file"), 1, 100, None);
+        assert_eq!(
+            file.instructions,
+            "Does this code smell? Answer yes only when the code does it, not when the question doesn't apply."
+        );
+
+        let changed = verdict(&rule("smell", ""), 41, 80, Some(vec![43, 50, 51, 52]));
+        assert_eq!(changed.key, "smell.41-80");
+        assert_eq!(
+            changed.instructions,
+            "Look at lines 43, 50-52 of the file; the rest is context. Does this code smell? \
+             Answer yes only when those lines do it, not when the question doesn't apply."
+        );
+
+        assert_eq!(
+            verdict(&bullet("No fetch."), 1, 40, Some(vec![7])).instructions,
+            "How does line 7 of the file relate to the following team rule? Rule: No fetch."
+        );
+
+        let validates = rule("smell", "question: Does it validate input first?\nfail_when: no");
+        assert_eq!(verdict(&validates, 1, 100, None).instructions, "Does it validate input first?");
+    }
+
+    #[test]
+    fn a_convention_is_a_choice_and_asks_where() {
+        let rule = bullet("No fetch outside the Store.");
+        let verdict = verdict(&rule, 41, 80, None);
+        let places = Some(vec!["L41".to_string(), "L42".to_string()]);
+        let place = Question::new(&rule, 41, 80, Kind::Where, places, None);
+
+        assert_eq!([verdict.key.as_str(), place.key.as_str()], ["README.41-80", "README.41-80.where"]);
+        assert!(verdict.choice && place.choice);
+        assert_eq!(
+            verdict.instructions,
+            "How do lines 41-80 of the file relate to the following team rule? Rule: No fetch outside the Store."
+        );
+        let options: Vec<(&str, Option<&str>)> =
+            verdict.options.iter().map(|(name, about)| (name.as_str(), about.as_deref())).collect();
+        assert_eq!(
+            options,
+            [
+                ("breaks", Some("The code clearly breaks the rule.")),
+                ("follows", Some("The code follows the rule.")),
+                ("not_applicable", Some("The rule doesn't apply to this code.")),
+            ]
+        );
+        assert_eq!(
+            place.instructions,
+            "Which line, given by its number as L<number>, most clearly breaks the following team rule? \
+             Rule: No fetch outside the Store."
+        );
+        assert_eq!(place.options, [("L41".to_string(), None), ("L42".to_string(), None)]);
+    }
+}
