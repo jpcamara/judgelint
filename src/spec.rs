@@ -17,6 +17,8 @@ use std::sync::{Arc, LazyLock};
 
 use anyhow::{Result, bail};
 use regex::Regex;
+use serde::Deserialize;
+use serde::de::IgnoredAny;
 
 use crate::config::{self, OneOrMany, RULES_DIR};
 use crate::glob::{self, Patterns};
@@ -70,6 +72,7 @@ pub fn load(path: &str, default_threshold: f64, rule_file: bool) -> Result<Vec<R
     let matched = FRONTMATTER.captures(&content);
     let named_spec = !rule_file && Path::new(path).file_name().is_some_and(|n| n != "README.md");
     let (data, body): (Frontmatter, &str) = match &matched {
+        Some(m) if !(rule_file || named_spec || is_spec(&m[1], path)?) => return Ok(Vec::new()),
         Some(m) => (config::parse_yaml(&m[1], path)?, m.get(2).map_or("", |b| b.as_str())),
         None if rule_file => bail!("{path}: rules start with a --- frontmatter block"),
         None if named_spec => (Frontmatter::default(), &content),
@@ -130,6 +133,18 @@ pub fn load(path: &str, default_threshold: f64, rule_file: bool) -> Result<Vec<R
         )?);
     }
     Ok(rules)
+}
+
+/// Whether a README's frontmatter has paths: or a question:. It's read
+/// loosely first, so a README with other tools' keys (title:) isn't an error.
+fn is_spec(yaml: &str, path: &str) -> Result<bool> {
+    #[derive(Deserialize, Default)]
+    struct Keys {
+        paths: Option<IgnoredAny>,
+        question: Option<IgnoredAny>,
+    }
+    let keys: Keys = config::parse_yaml(yaml, path)?;
+    Ok(keys.paths.is_some() || keys.question.is_some())
 }
 
 #[derive(Default)]
