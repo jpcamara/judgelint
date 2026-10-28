@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.0 (unreleased)
+
+- judgelint is written in Rust now. The gem carries the binary for macOS and
+  Linux on arm64 and x86_64. On any other platform the gem says how to build
+  it with Cargo; it no longer runs as plain Ruby. There's no Ruby API.
+- It's much faster and smaller than 0.1.10's native binary. On a Mac mini:
+
+  | Run | 0.1.10 | 0.2.0 |
+  |---|---|---|
+  | Plan 50,000 files | 9.0 s, 140 MB | 1.2 s, 54 MB |
+  | Check 5,000 files, nothing cached | 3.4 s, 82 MB | 0.7 s, 19 MB |
+  | Check 5,000 files, all cached | 1.5 s, 56 MB | 0.16 s, 16 MB |
+  | Check 50,000 files, nothing cached | 23.8 s, 487 MB | 6.4 s, 75 MB |
+
+- Answers are cached in `.judgelint/cache.bin`. The old `cache.json` isn't
+  read, so the first run asks again; delete it afterward. The new cache is
+  about a quarter of the size.
+- Commands, options, specs, config and output formats are the same. Error
+  messages are worded differently.
+
 ## 0.1.10 (2026-10-27)
 
 - `check` and `test` use far less memory and run faster. Against 0.1.9 on
