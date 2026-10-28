@@ -719,3 +719,99 @@ fn agreed(spread: &[f64]) -> Option<usize> {
     let (best, value) = spread.iter().enumerate().reduce(|best, x| if x.1 > best.1 { x } else { best })?;
     (total > 0.0 && value / total >= PLACE_AT).then_some(best)
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::config::Endpoint;
+    use crate::glob::Patterns;
+    use crate::testing::{TempDir, rule};
+
+    /// One model, at an address where nothing answers: these tests plan
+    /// requests without sending them.
+    fn config(limits: Value) -> Config {
+        let mut entry = json!({"api_base": "http://127.0.0.1:1", "model": "m", "auth": "none"});
+        entry.as_object_mut().unwrap().extend(limits.as_object().unwrap().clone());
+        Config {
+            models: vec![Endpoint::new(entry).unwrap()],
+            threshold: 0.7,
+            ignore: Patterns::new(Vec::new()).unwrap(),
+            max_cost_usd: 1.0,
+        }
+    }
+
+    fn clients(config: &Config) -> Vec<Client> {
+        config.models.iter().map(|e| Client::new(e.clone(), Arc::default()).unwrap()).collect()
+    }
+
+    fn plan(runner: &Runner, clients: &[Client], path: &str, contents: &str) -> Vec<Job> {
+        let mut jobs = runner.prepare_file(path, contents.into(), Some(&Changed::All)).unwrap();
+        runner.pack_all(&mut jobs, clients, &Cache::open(None).unwrap()).unwrap();
+        jobs
+    }
+
+    #[test]
+    fn files_with_the_same_shape_share_their_questions() {
+        let (config, rules) = (config(json!({})), [rule("smell", "")]);
+        let runner = Runner::new(&config, &rules);
+        let a = runner.prepare_file("app/a.rb", "x\n".into(), Some(&Changed::All)).unwrap();
+        let b = runner.prepare_file("app/b.rb", "y\n".into(), Some(&Changed::All)).unwrap();
+        assert!(Arc::ptr_eq(&a[0].questions, &b[0].questions));
+    }
+
+    #[test]
+    fn a_file_over_the_token_budget_is_skipped_before_anything_is_sent() {
+        let (config, rules) = (config(json!({"max_state_tokens": 100})), [rule("smell", "")]);
+        let runner = Runner::new(&config, &rules);
+        let jobs = plan(&runner, &clients(&config), "app/a.rb", &"x".repeat(400));
+        assert_eq!(runner.request_count(&jobs), 0);
+        assert_eq!(jobs[0].verdicts()[0].status, Status::Skipped);
+    }
+
+    #[test]
+    fn packs_questions_by_count_and_tokens() {
+        let rules = [rule("a", ""), rule("b", "")];
+        let file = "x\n".repeat(200);
+        let config = config(json!({"batch_size": 4}));
+        let runner = Runner::new(&config, &rules);
+        let jobs = plan(&runner, &clients(&config), "app/a.rb", &file);
+        let sizes: Vec<usize> = jobs[0].requests.iter().map(|r| r.questions.len()).collect();
+        assert_eq!(sizes, [4, 4, 2]);
+        assert_eq!(runner.request_count(&jobs), 3);
+        assert_eq!(runner.estimated_tokens(&jobs), jobs[0].requests.iter().map(|r| r.tokens).sum::<usize>());
+
+        let config = self::config(json!({"max_request_tokens": 120}));
+        let runner = Runner::new(&config, &rules);
+        assert!(runner.request_count(&plan(&runner, &clients(&config), "app/a.rb", &file)) > 3);
+    }
+
+    #[test]
+    fn a_file_that_changes_or_goes_after_planning_is_not_sent() {
+        let dir = TempDir::new();
+        let (config, rules) = (config(json!({})), [rule("smell", "paths: [\"**/*.rb\"]")]);
+        let runner = Runner::new(&config, &rules);
+        let clients = clients(&config);
+        let cache_path = dir.path("cache.bin");
+        let cache = Cache::open(Some(&cache_path)).unwrap();
+        for change in ["y\n", ""] {
+            let path = dir.write("app/a.rb", "x\n");
+            let mut jobs = plan(&runner, &clients, &path, &std::fs::read_to_string(&path).unwrap());
+            if change.is_empty() {
+                std::fs::remove_file(&path).unwrap();
+            } else {
+                std::fs::write(&path, change).unwrap();
+            }
+            let error = runner.execute(&mut jobs, &clients, &cache).unwrap_err();
+            assert_eq!(error.to_string(), format!("{path} changed while judgelint ran; run it again"));
+            assert!(!std::path::Path::new(&cache_path).exists());
+        }
+    }
+
+    #[test]
+    fn a_finding_names_a_place_only_when_the_models_agree_on_one() {
+        assert_eq!(agreed(&[0.45, 0.55, 0.0]), Some(1));
+        assert_eq!(agreed(&[0.4, 0.35, 0.25]), None, "no line has half");
+    }
+}

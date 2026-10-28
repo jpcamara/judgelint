@@ -77,3 +77,34 @@ impl Verdict {
         (self.status == Status::Violation) == (self.expected == Some(Expected::Fail))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::rule;
+
+    #[test]
+    fn thresholds_and_the_uncertain_band() {
+        let rule = rule("smell", "");
+        for (probability, status) in [(0.75, Status::Violation), (0.5, Status::Uncertain), (0.39, Status::Pass)] {
+            assert_eq!(Verdict::classify(&rule, 0, "a.rb".into(), probability, 0.4).status, status, "{probability}");
+        }
+    }
+
+    #[test]
+    fn warnings_never_fail_the_run() {
+        let rules = [rule("smell", "severity: warning"), rule("other", "")];
+        let warning = Verdict::classify(&rules[0], 0, "a.rb".into(), 0.9, 0.4);
+        assert_eq!(warning.status, Status::Violation);
+        assert!(!warning.failing(&rules));
+        assert!(Verdict::classify(&rules[1], 1, "a.rb".into(), 0.9, 0.4).failing(&rules));
+    }
+
+    #[test]
+    fn an_excused_example_isnt_a_violation() {
+        let example = |status, expected| Verdict { expected: Some(expected), ..Verdict::new(0, "a.rb".into(), status) };
+        assert!(example(Status::Excused, Expected::Pass).correct());
+        assert!(!example(Status::Excused, Expected::Fail).correct());
+        assert!(!example(Status::Refused, Expected::Pass).correct());
+    }
+}

@@ -90,4 +90,22 @@ mod tests {
         assert_eq!(super::delimit(1000), "1,000");
         assert_eq!(super::delimit(1234567), "1,234,567");
     }
+
+    #[test]
+    fn records_requests_tokens_and_cost() {
+        let usage = super::Usage::default();
+        for _ in 0..2 {
+            usage.record(&serde_json::json!({"usage": {"input_tokens": 500_000}}), Some(0.042));
+        }
+        let summary = usage.summary();
+        assert_eq!((summary.requests, summary.input_tokens, summary.cost_usd), (2, 1_000_000, Some(0.042)));
+        assert_eq!(usage.line(), "judgelint: 2 requests, 1,000,000 input tokens, $0.0420");
+    }
+
+    #[test]
+    fn prefers_the_cost_a_provider_reports() {
+        let usage = super::Usage::default();
+        usage.record(&serde_json::json!({"usage": {"input_tokens": 300, "cost": 0.0005}}), Some(0.042));
+        assert_eq!(usage.summary().cost_usd, Some(0.0005));
+    }
 }

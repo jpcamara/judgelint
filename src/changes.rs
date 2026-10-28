@@ -130,4 +130,49 @@ mod tests {
         let diff = "+++ b/a.rb\n@@ -1,0 +2,2 @@\n+x\n@@ -9 +10,0 @@\n+++ /dev/null\n";
         assert_eq!(parse_diff(diff).get("a.rb"), Some(&Changed::Lines(vec![2, 3, 10])));
     }
+
+    #[test]
+    fn files_in_a_diff() {
+        let diff = concat!(
+            "diff --git a/app/a.rb b/app/a.rb\n",
+            "--- a/app/a.rb\n",
+            "+++ b/app/a.rb\n",
+            "@@ -3 +3 @@ class A\n",
+            "-  old\n",
+            "+  new\n",
+            "@@ -10,2 +10,0 @@ class A\n",
+            "-  gone\n",
+            "-  gone\n",
+            "@@ -20,0 +19,3 @@ class A\n",
+            "+  one\n",
+            "+  two\n",
+            "+  three\n",
+            "diff --git a/app/with space.rb b/app/with space.rb\n",
+            "new file mode 100644\n",
+            "--- /dev/null\n",
+            "+++ b/app/with space.rb\t\n",
+            "@@ -0,0 +1,2 @@\n",
+            "+x\n",
+            "+y\n",
+            "diff --git a/top.rb b/top.rb\n",
+            "--- a/top.rb\n",
+            "+++ b/top.rb\n",
+            "@@ -1 +0,0 @@\n",
+            "-only line\n",
+        );
+        let changed = parse_diff(diff);
+        assert_eq!(changed["app/a.rb"], Changed::Lines(vec![3, 10, 19, 20, 21]));
+        assert_eq!(changed["app/with space.rb"], Changed::Lines(vec![1, 2]));
+        assert_eq!(changed["top.rb"], Changed::Lines(vec![1]), "a deletion at the top marks line 1");
+    }
+
+    #[test]
+    fn refs_git_could_read_as_options_or_ranges() {
+        for good in ["main", "origin/main", "v1.2.0", "feature/x-y", "HEAD~1", "HEAD^", "3f2a9c1"] {
+            assert!(check_ref(good).is_ok(), "{good}");
+        }
+        for bad in ["-x", "--upload-pack=x", "a..b", "a b", ""] {
+            assert!(check_ref(bad).is_err(), "{bad}");
+        }
+    }
 }

@@ -68,14 +68,18 @@ pub fn discover(default_threshold: f64, ignore: &Patterns) -> Result<Vec<Rule>> 
 /// A rule file, which must have frontmatter, or a spec. A README without
 /// paths: in its frontmatter isn't a spec.
 pub fn load(path: &str, default_threshold: f64, rule_file: bool) -> Result<Vec<Rule>> {
-    let content = config::read(path)?;
-    let matched = FRONTMATTER.captures(&content);
+    parse(path, &config::read(path)?, default_threshold, rule_file)
+}
+
+/// The rules in a rule file or spec, from its contents.
+pub fn parse(path: &str, content: &str, default_threshold: f64, rule_file: bool) -> Result<Vec<Rule>> {
+    let matched = FRONTMATTER.captures(content);
     let named_spec = !rule_file && Path::new(path).file_name().is_some_and(|n| n != "README.md");
     let (data, body): (Frontmatter, &str) = match &matched {
         Some(m) if !(rule_file || named_spec || is_spec(&m[1], path)?) => return Ok(Vec::new()),
         Some(m) => (config::parse_yaml(&m[1], path)?, m.get(2).map_or("", |b| b.as_str())),
         None if rule_file => bail!("{path}: rules start with a --- frontmatter block"),
-        None if named_spec => (Frontmatter::default(), &content),
+        None if named_spec => (Frontmatter::default(), content),
         None => return Ok(Vec::new()),
     };
     if data.question.is_some() {
@@ -285,6 +289,37 @@ fn severity(text: &str) -> Severity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::question::{Kind, Question};
+    use crate::rule::Scope;
+
+    const SERVICES: &str = "\
+---
+paths: [\"src/services/*.ts\"]
+excludes: [\"src/services/legacy.ts\"]
+---
+# Service conventions
+
+Every file here is one service.
+
+- **Domain failures are values, never exceptions.** A service returns
+  `{ ok: false, error }` for anything a caller could cause.
+- Services should prefer small inputs.
+  - Nested detail stays with its bullet.
+
+```ts
+- not a rule, it's in a code fence
+```
+
+1. **No I/O except through the injected Store**: no timers, no fetch.
+";
+
+    fn spec(path: &str, content: &str) -> Vec<Rule> {
+        parse(path, content, 0.7, false).unwrap()
+    }
+
+    fn ids(rules: &[Rule]) -> Vec<&str> {
+        rules.iter().map(|r| r.id.as_str()).collect()
+    }
 
     #[test]
     fn leads_and_slugs() {
@@ -304,5 +339,190 @@ mod tests {
         assert_eq!(lines, [6, 12]);
         assert_eq!(found[0].examples[0].code, "SMELL\n");
         assert_eq!(found[0].examples[0].expected, Expected::Fail);
+    }
+
+    #[test]
+    fn each_top_level_bullet_is_a_rule() {
+        let rules = spec("src/services/README.md", SERVICES);
+        assert_eq!(
+            ids(&rules),
+            [
+                "src/services/domain-failures-are-values-never-exceptions",
+                "src/services/services-should-prefer-small-inputs",
+                "src/services/no-i-o-except-through-the",
+            ]
+        );
+        let values = &rules[0];
+        assert_eq!(
+            values.convention.as_deref(),
+            Some(
+                "Domain failures are values, never exceptions. A service returns `{ ok: false, error }` \
+                 for anything a caller could cause."
+            )
+        );
+        assert_eq!(values.message, "Domain failures are values, never exceptions.");
+        assert_eq!(values.paths.raw, ["src/services/*.ts"]);
+        assert_eq!(values.excludes.raw, ["src/services/legacy.ts"]);
+        assert_eq!(values.examples_dir, ".judgelint/examples/src/services/domain-failures-are-values-never-exceptions");
+        assert_eq!(
+            rules[1].convention.as_deref(),
+            Some("Services should prefer small inputs. Nested detail stays with its bullet.")
+        );
+        assert_eq!(rules[2].message, "No I/O except through the injected Store.");
+    }
+
+    #[test]
+    fn severity_follows_the_wording_unless_the_spec_sets_it() {
+        let severities = |content: &str| -> Vec<&str> {
+            spec("src/services/README.md", content).iter().map(Rule::severity).collect()
+        };
+        assert_eq!(severities(SERVICES), ["error", "warning", "error"]);
+        let set = SERVICES.replace("excludes:", "severity: warning\nexcludes:");
+        assert_eq!(severities(&set), ["warning", "warning", "warning"]);
+    }
+
+    #[test]
+    fn cohorts_and_scope() {
+        let features = spec(
+            "src/features/README.md",
+            "---\npaths: [\"src/features/*\"]\ncohort: by_directory\ncontext: [\"src/types.ts\"]\n---\n- One capability per feature.\n",
+        );
+        assert_eq!(ids(&features), ["src/features/one-capability-per-feature"]);
+        assert_eq!(features[0].scope, Scope::Directory);
+        assert_eq!(features[0].context, ["src/types.ts"]);
+        let tests =
+            spec("tests/README.md", "---\npaths: [\"tests/*.ts\"]\ncohort: by_file\n---\n- One expect per it.\n");
+        assert_eq!(tests[0].scope, Scope::File);
+        let docs = spec("docs.judgelint.md", "---\npaths: [\"docs/**/*.md\"]\n---\n- Headings are sentence case.\n");
+        assert_eq!(ids(&docs), ["docs/headings-are-sentence-case"]);
+        assert_eq!(docs[0].scope, Scope::Window);
+    }
+
+    #[test]
+    fn readmes_without_paths_are_not_specs() {
+        assert!(spec("README.md", "# A project\n\n- a bullet that isn't a rule\n").is_empty());
+        assert!(spec("lib/README.md", "---\ntitle: notes\n---\n- also not a rule\n").is_empty());
+        assert!(spec("src/README.md", "- **Not a rule.** A README needs paths: to be a spec.\n").is_empty());
+    }
+
+    #[test]
+    fn a_rules_file_without_a_question_is_a_spec_and_needs_bullets() {
+        let path = ".judgelint/rules/ruby.md";
+        let rules =
+            parse(path, "---\npaths: [\"**/*.rb\"]\n---\n- **No silent rescues.** Log or re-raise.\n", 0.7, true);
+        assert_eq!(ids(&rules.unwrap()), ["ruby/no-silent-rescues"]);
+        let error = parse(path, "---\npaths: [\"**/*.rb\"]\n---\nJust prose.\n", 0.7, true).err().unwrap();
+        assert!(error.to_string().contains("needs a question, or bullets"), "{error}");
+    }
+
+    #[test]
+    fn repeated_bullets_get_distinct_ids() {
+        let rules = spec("README.md", "---\npaths: [\"**/*.rb\"]\n---\n- Keep it short.\n- Keep it short, really.\n");
+        assert_eq!(ids(&rules), ["root/keep-it-short", "root/keep-it-short-really"]);
+        let rules = spec("README.md", "---\npaths: [\"**/*.rb\"]\n---\n- Keep it short.\n- Keep it short!\n");
+        assert_eq!(ids(&rules), ["root/keep-it-short", "root/keep-it-short-2"]);
+    }
+
+    #[test]
+    fn unknown_spec_keys_and_cohorts_are_errors() {
+        assert!(parse("README.md", "---\npaths: [\"x\"]\nquestions: oops\n---\n- A rule.\n", 0.7, false).is_err());
+        assert!(parse("README.md", "---\npaths: [\"x\"]\ncohort: by_repo\n---\n- A rule.\n", 0.7, false).is_err());
+    }
+
+    #[test]
+    fn violation_and_compliant_lines_are_the_criteria() {
+        let rules = spec(
+            "src/README.md",
+            "---\npaths: [\"src/*.ts\"]\n---\n\
+             - **No I/O except through the injected Store.** No timers, no fetch.\n  \
+             violation: calls fetch, console, or a timer\n    \
+             directly, outside the Store\n  \
+             compliant: reads and writes only through the Store it's given\n\
+             - Keep it short.\n",
+        );
+        let (io, short) = (&rules[0], &rules[1]);
+        assert_eq!(io.convention.as_deref(), Some("No I/O except through the injected Store. No timers, no fetch."));
+        assert_eq!(io.yes_means.as_deref(), Some("calls fetch, console, or a timer directly, outside the Store"));
+        assert_eq!(io.no_means.as_deref(), Some("reads and writes only through the Store it's given"));
+        let options = Question::new(io, 1, 40, Kind::Verdict, None, None).options;
+        assert_eq!([&options[0].1, &options[1].1], [&io.yes_means, &io.no_means]);
+        assert_eq!(short.yes_means, None);
+        assert!(io.prose.as_deref().unwrap().contains("violation: calls fetch"), "the model reads the criteria too");
+    }
+
+    #[test]
+    fn conventions_md_needs_no_frontmatter() {
+        let root = spec("CONVENTIONS.md", "# How we write code\n\n- **No silent rescues.** Log or re-raise.\n");
+        let root = &root[0];
+        assert_eq!(root.id, "root/no-silent-rescues");
+        assert_eq!(root.paths.raw, ["**/*"]);
+        assert!(root.applies_to("lib/a.rb"));
+        assert!(!root.applies_to("docs/guide.md"), "Markdown is documentation, not code");
+        assert!(!root.applies_to("Gemfile.lock"));
+        assert!(root.prose.as_deref().unwrap().contains("# How we write code"));
+
+        let api = spec(
+            "src/api/CONVENTIONS.md",
+            "---\nexcludes: [\"src/api/generated/**\"]\n---\n- Handlers should stay short.\n",
+        );
+        let api = &api[0];
+        assert_eq!(api.id, "src/api/handlers-should-stay-short");
+        assert_eq!(api.severity, Severity::Warning);
+        assert!(api.applies_to("src/api/users.ts"));
+        assert!(!api.applies_to("src/web/users.ts"), "a spec covers its own directory");
+        assert!(!api.applies_to("src/api/generated/client.ts"));
+    }
+
+    #[test]
+    fn bad_and_good_blocks_under_a_bullet_are_examples() {
+        let content = "\
+---
+severity: warning
+---
+- **No silent rescues.** Log or re-raise.
+
+  Bad:
+
+  ```ruby
+  rescue StandardError
+    nil
+  ```
+
+  **Good:**
+
+  ```ruby
+  rescue Timeout => e
+    raise
+  ```
+
+  ```
+  rescue => e
+    log(e)
+  ```
+
+  The last one logs, so it's fine.
+
+```ruby
+# Top-level code isn't an example.
+```
+
+- Keep it short.
+";
+        let rules = spec("CONVENTIONS.md", content);
+        let (rescues, short) = (&rules[0], &rules[1]);
+        assert_eq!(rescues.convention.as_deref(), Some("No silent rescues. Log or re-raise."));
+        let examples: Vec<(Expected, usize, String)> =
+            rescues.inline_examples.iter().map(|e| (e.expected, e.line, e.name())).collect();
+        assert_eq!(
+            examples,
+            [
+                (Expected::Fail, 9, "example.ruby".into()),
+                (Expected::Pass, 16, "example.ruby".into()),
+                (Expected::Pass, 21, "example".into()),
+            ]
+        );
+        assert_eq!(rescues.inline_examples[0].code, "rescue StandardError\n  nil\n");
+        assert!(short.inline_examples.is_empty());
+        assert!(rescues.prose.as_deref().unwrap().contains("rescue StandardError"), "the model reads the examples");
     }
 }

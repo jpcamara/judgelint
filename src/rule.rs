@@ -251,3 +251,69 @@ impl Rule {
         if self.fail_when_yes { yes } else { 1.0 - yes }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::spec;
+
+    fn rule_file(id: &str, content: &str) -> Result<Vec<Rule>> {
+        spec::parse(&format!(".judgelint/rules/{id}.md"), content, 0.7, true)
+    }
+
+    #[test]
+    fn reads_frontmatter_and_uses_the_body_for_the_message() {
+        let content = "\
+---
+question: Does this code swallow an exception?
+yes_means: A rescue drops the error.
+no_means: Errors are logged or re-raised.
+paths: \"app/**/*.rb\"
+excludes: [\"app/legacy/**\"]
+severity: warning
+threshold: 0.8
+---
+# Heading
+
+Swallowed exceptions
+hide bugs.
+";
+        let rule = rule_file("no-silent-rescue", content).unwrap().remove(0);
+        assert_eq!(rule.id, "no-silent-rescue");
+        assert_eq!(rule.question_key, "no_silent_rescue");
+        assert_eq!(rule.yes_means.as_deref(), Some("A rescue drops the error."));
+        assert_eq!(rule.paths.raw, ["app/**/*.rb"]);
+        assert_eq!(rule.severity(), "warning");
+        assert_eq!(rule.threshold, 0.8);
+        assert_eq!(rule.message, "Swallowed exceptions hide bugs.");
+        assert!(rule.applies_to("app/services/foo.rb"));
+        assert!(rule.applies_to("app/foo.rb"));
+        assert!(!rule.applies_to("app/legacy/old.rb"));
+        assert!(!rule.applies_to("lib/foo.rb"));
+    }
+
+    #[test]
+    fn bare_yes_and_no_from_yaml_still_mean_answers() {
+        let rule = rule_file("validates", "---\nquestion: Does this validate input first?\nfail_when: no\n---\n")
+            .unwrap()
+            .remove(0);
+        assert!(!rule.fail_when_yes);
+        assert!((rule.violation_probability(0.2) - 0.8).abs() < 1e-9);
+        assert_eq!(rule.threshold, 0.7);
+    }
+
+    #[test]
+    fn rejects_unknown_keys_and_missing_questions() {
+        assert!(rule_file("bad", "---\nquestion: Q?\nyes: something\n---\n").is_err());
+        let error = rule_file("bad", "---\npaths: [x]\n---\n").err().unwrap();
+        assert!(error.to_string().contains("needs a question"), "{error}");
+    }
+
+    #[test]
+    fn rejects_bad_thresholds() {
+        for threshold in ["high", "1.5"] {
+            let content = format!("---\nquestion: Does this code smell?\nthreshold: {threshold}\n---\n");
+            assert!(rule_file("smell", &content).is_err(), "{threshold}");
+        }
+    }
+}

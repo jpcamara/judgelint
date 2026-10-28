@@ -215,3 +215,88 @@ fn listed(answer: &Value) -> Option<Value> {
     });
     Some(Value::Object(pairs.collect()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::question::Kind;
+    use crate::testing::rule;
+
+    fn question(id: &str, yaml: &str, first: u32, last: u32) -> Question {
+        Question::new(&rule(id, yaml), first, last, Kind::Verdict, None, None)
+    }
+
+    fn yes(answer: &Option<Answer>) -> Option<f64> {
+        match answer {
+            Some(Answer::Yes(p)) => Some(*p),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn system_one_body() {
+        let smell = question("smell", "yes_means: It smells.\nno_means: It doesn't.", 1, 40);
+        let plain = question("plain", "", 41, 80);
+        let body = Protocol::SystemOne.payload(Some("jev-latest"), &[&smell, &plain], json!("SMELL"), &Map::new());
+        let expected = json!({
+            "model": "jev-latest",
+            "state": "SMELL",
+            "questions": {
+                "smell.1-40": {
+                    "type": "noul",
+                    "instructions": smell.instructions,
+                    "criteria": {"true": "It smells.", "false": "It doesn't."},
+                },
+                "plain.41-80": {"type": "noul", "instructions": plain.instructions},
+            },
+        });
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn decisions_body() {
+        let smell = question("smell", "yes_means: It smells.\nno_means: It doesn't.", 1, 40);
+        let plain = question("plain", "", 1, 40);
+        let body = Protocol::Decisions.payload(Some("gpt-6-luna"), &[&smell, &plain], json!("fine"), &Map::new());
+        let expected = json!({
+            "model": "gpt-6-luna",
+            "input": "fine",
+            "questions": [
+                {
+                    "type": "predicate",
+                    "name": "smell.1-40",
+                    "instructions": format!("{}\nYes: It smells.\nNo: It doesn't.", smell.instructions),
+                },
+                {"type": "predicate", "name": "plain.1-40", "instructions": plain.instructions},
+            ],
+        });
+        assert_eq!(body, expected);
+    }
+
+    #[test]
+    fn decisions_answers_match_by_name_then_by_order() {
+        let (a, b) = (question("a", "", 1, 40), question("b", "", 1, 40));
+        let data = json!({"answers": [
+            {"type": "predicate", "name": "b.1-40", "probability": 0.2},
+            {"type": "predicate", "probability": 0.7},
+        ]});
+        let answers = Protocol::Decisions.parse(&data, &[&a, &b]).unwrap();
+        assert_eq!(answers.iter().map(yes).collect::<Vec<_>>(), [Some(0.7), Some(0.2)]);
+    }
+
+    #[test]
+    fn refusals_are_none_not_errors() {
+        let a = question("a", "", 1, 40);
+        let data = json!({"answers": [{"type": "refusal", "name": "a.1-40"}]});
+        assert!(Protocol::Decisions.parse(&data, &[&a]).unwrap()[0].is_none());
+        let data = json!({"answers": {"a.1-40": {"type": "refusal"}}});
+        assert!(Protocol::SystemOne.parse(&data, &[&a]).unwrap()[0].is_none());
+    }
+
+    #[test]
+    fn missing_answers_are_errors() {
+        let smell = question("smell", "", 1, 40);
+        let error = Protocol::SystemOne.parse(&json!({"answers": {}}), &[&smell]).err().unwrap();
+        assert!(error.to_string().contains("No yes/no answer for smell.1-40"), "{error}");
+    }
+}

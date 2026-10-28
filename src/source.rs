@@ -143,3 +143,48 @@ fn numbered(contents: &str, out: &mut String) {
         let _ = writeln!(out, "{}: {line}", number + 1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TempDir;
+
+    fn file(path: &str, shown_as: Option<&str>, text: &str) -> (Source, Vec<String>) {
+        let read = vec![text.to_string()];
+        (Source::file(path, shown_as, Arc::default(), None).scan(&read), read)
+    }
+
+    #[test]
+    fn numbers_lines_and_covers_the_file_with_windows() {
+        let (source, read) = file("a.rb", Some("shown.rb"), "one\ntwo\nthree");
+        assert_eq!(source.state(&read, None).unwrap(), json!("Path: shown.rb\n\n1: one\n2: two\n3: three\n"));
+        assert_eq!(source.windows(2), [(1, 2), (3, 3)]);
+        assert_eq!(source.windows(40), [(1, 3)]);
+    }
+
+    #[test]
+    fn judgehints_are_read_from_comments_only() {
+        let (source, read) = file("app/a.rb", None, "x # judgehint: kept short\n");
+        assert_eq!((source.line_count, source.hinted(1, 1)), (1, true));
+        assert_eq!(source.state(&read, None).unwrap(), json!("Path: app/a.rb\n\n1: x # judgehint: kept short\n"));
+
+        let (source, _) = file("app/a.rb", None, "raise \"judgehint: not a comment\"\n");
+        assert!(!source.hinted(1, 1));
+    }
+
+    #[test]
+    fn a_directory_is_its_files_then_the_context() {
+        let dir = TempDir::new();
+        dir.write("a/index.rb", "one\n");
+        dir.write("a/helper.rb", "SMELL\n");
+        let types = dir.write("types.rb", "Types = 1\n");
+        let a = dir.path("a");
+        let source = Source::directory(&a, None, Arc::new(vec![types.clone()])).unwrap();
+        let read = source.read_all().unwrap();
+        let expected = format!(
+            "Directory: {a}\n\nPath: {a}/helper.rb\n\n1: SMELL\n\nPath: {a}/index.rb\n\n1: one\n\n\
+             Context, for reference only (not under review):\n\nPath: {types}\n\nTypes = 1\n"
+        );
+        assert_eq!(source.scan(&read).state(&read, None).unwrap(), Value::String(expected));
+    }
+}
