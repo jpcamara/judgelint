@@ -35,8 +35,16 @@ jobs:
           bundler-cache: true
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Lint
+        if: matrix.platform == 'x86_64-linux'
+        run: |
+          cargo fmt --check
+          cargo clippy --release --locked --all-targets -- -D warnings
 
       - name: Test
         run: bundle exec rake test
