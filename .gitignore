@@ -1,7 +1,6 @@
-/build/
+/target/
 /pkg/
 /Gemfile.lock
 /.bundle/
-/.judgelint/cache.json
 /vendor/
 /libexec/

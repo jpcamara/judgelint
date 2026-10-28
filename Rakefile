@@ -4,68 +4,37 @@ require "rake/testtask"
 require "rubygems/package"
 require "json"
 
-Rake::TestTask.new(:test) do |t|
-  t.libs << "test" << "lib"
+BINARY = "target/release/judgelint"
+
+desc "Build the binary with Cargo"
+task :build do
+  sh "cargo", "build", "--release", "--locked"
+end
+
+desc "Run the Rust unit tests"
+task "test:unit" do
+  sh "cargo", "test", "--release", "--locked"
+end
+
+desc "Run the end-to-end tests against the binary (JUDGELINT_BINARY, or a fresh build)"
+Rake::TestTask.new("test:cli") do |t|
+  t.libs << "test"
   t.test_files = FileList["test/**/*_test.rb"]
 end
+task "test:cli" => :build unless ENV["JUDGELINT_BINARY"]
 
-SPINEL = ENV.fetch("SPINEL", "spinel")
-BINARY = "build/judgelint"
+desc "Run every test"
+task test: ["test:unit", "test:cli"]
 
-# Spinel links OpenSSL dynamically from wherever it found it at build time,
-# which other machines won't have. This compiles Spinel's C with the same
-# ingredients but OpenSSL's static archives, so the binary needs only libc.
-desc "Compile the native binary with Spinel (set SPINEL to its path if it isn't on PATH)"
-task :spinel do
-  mkdir_p "build"
-  build = `#{SPINEL} -I lib exe/judgelint --print-build`.lines.map { |line| line.chomp.split(" ", 2) }
-  abort "spinel --print-build failed" unless $?.success?
-
-  libdirs = build.filter_map { |kind, value| value.delete_prefix("-L") if kind == "lib" && value.start_with?("-L") }
-  args = build.flat_map do |kind, value|
-    case kind
-    when "cflag", "define" then [value]
-    when "include" then ["-I#{value}"]
-    when "link", "runtime" then [value]
-    when "lib"
-      library = value[/\A-l(ssl|crypto)\z/, 1]
-      next [] if value.start_with?("-L")
-      next [value] unless library
-
-      # Where Spinel found OpenSSL, pkg-config's or Homebrew's OpenSSL, or
-      # wherever the compiler would look (on Linux, the system's libssl-dev).
-      dirs = libdirs + [`pkg-config --variable=libdir openssl 2>/dev/null`.strip,
-                        "#{`brew --prefix openssl@3 2>/dev/null`.strip}/lib"]
-      found = `#{ENV.fetch('CC', 'cc')} -print-file-name=lib#{library}.a`.strip
-      candidates = dirs.reject(&:empty?).map { |dir| File.join(dir, "lib#{library}.a") } + [found]
-      static = candidates.find { |path| File.file?(path) }
-      abort "No static lib#{library}.a in #{candidates.join(', ')}" unless static
-      [static]
-    else []
-    end
-  end
-  args += %w[-lpthread -ldl] if RUBY_PLATFORM.include?("linux")
-
-  sh SPINEL, "-I", "lib", "exe/judgelint", "-c", "-o", "build/judgelint.c", "--force"
-  sh ENV.fetch("CC", "cc"), "-O2", "-w", "build/judgelint.c", *args.reject { |arg| arg.end_with?(".c") }, "-o", BINARY
-  sh "strip", BINARY
-end
-
-desc "Run the end-to-end tests against the Spinel binary too"
-task "test:spinel" => :spinel do
-  ENV["JUDGELINT_BINARY"] = File.expand_path(BINARY)
-  Rake::Task[:test].invoke
-end
-
-desc "Build the plain Ruby gem into pkg/"
+desc "Build the plain gem, for platforms without a binary, into pkg/"
 task :gem do
   mkdir_p "pkg"
   spec = Gem::Specification.load("judgelint.gemspec")
   mv Gem::Package.build(spec), "pkg/"
 end
 
-desc "Build this platform's gem, with the native binary in libexec/, into pkg/"
-task "gem:native" => :spinel do
+desc "Build this platform's gem, with the binary in libexec/, into pkg/"
+task "gem:native" => :build do
   mkdir_p "libexec"
   cp BINARY, "libexec/judgelint"
   spec = Gem::Specification.load("judgelint.gemspec")
@@ -80,10 +49,11 @@ ensure
 end
 
 desc "Re-ask the model about examples/scoop-society and check it against praxis's verdicts"
-task :example do
+task example: :build do
+  binary = File.expand_path(BINARY)
   Dir.chdir("examples/scoop-society") do
-    rm_f ".judgelint/cache.json"
-    out = `ruby -I ../../lib ../../exe/judgelint --format json`
+    rm_f ".judgelint/cache.bin"
+    out = `#{binary} --format json`
     found = JSON.parse(out)["results"].select { |result| result["status"] == "violation" }
                                      .map { |result| [result["path"], result["rule"]] }.sort
     spec = JSON.parse(File.read("expected.json"))

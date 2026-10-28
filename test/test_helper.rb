@@ -3,7 +3,12 @@
 require "minitest/autorun"
 require "socket"
 require "tmpdir"
-require "judgelint"
+require "json"
+require "fileutils"
+
+# The binary under test: target/release/judgelint, or JUDGELINT_BINARY.
+BINARY = ENV.fetch("JUDGELINT_BINARY", File.expand_path("../target/release/judgelint", __dir__))
+VERSION = File.read(File.expand_path("../Cargo.toml", __dir__))[/^version = "(.+)"/, 1]
 
 # A decision-model endpoint on localhost that answers both protocols. Every
 # question answers yes with probability 0.9 when the state contains "SMELL",
@@ -85,40 +90,6 @@ class StubSystemOne
   end
 end
 
-# Answers from a block instead of a model, and records each request as
-# [state, question keys].
-class FakeClient
-  attr_reader :calls, :endpoint
-
-  # +limits+ are Endpoint settings: batch_size, max_state_tokens, and so on.
-  def initialize(model: "fake", **limits, &answer)
-    @answer = answer
-    @calls = []
-    @lock = Mutex.new
-    @endpoint = Judgelint::Endpoint.new({ "provider" => "fake", "model" => model, "price_per_million" => 1 }
-                                          .merge(limits.transform_keys(&:to_s)))
-  end
-
-  # The block answers with a yes probability, which a choice question turns
-  # into its distribution, or with the distribution itself.
-  def judge(state, questions)
-    @lock.synchronize { @calls << [state, questions.map(&:key)] }
-    questions.to_h do |question|
-      answer = @answer.call(state, question)
-      answer = StubSystemOne.spread(question.options.keys, answer) if question.choice? && answer.is_a?(Numeric)
-      [question.key, answer]
-    end
-  end
-
-  def tokens(state, questions)
-    JSON.generate(Judgelint::Protocol::SystemOne.payload("m", state, questions)).bytesize / 3
-  end
-
-  def question_tokens(question)
-    (JSON.generate(Judgelint::Protocol::SystemOne.render(question)).bytesize + question.key.bytesize + 6) / 3
-  end
-end
-
 module ProjectHelpers
   def in_project
     Dir.mktmpdir("judgelint") do |dir|
@@ -142,18 +113,4 @@ module ProjectHelpers
     MARKDOWN
   end
 
-  def config(**settings)
-    Judgelint::Config.new(settings.transform_keys(&:to_s))
-  end
-
-  # One model entry, as a mapping under models: would give it.
-  def endpoint(**settings)
-    Judgelint::Endpoint.new(settings.transform_keys(&:to_s))
-  end
-
-  # A rule as its frontmatter would declare it.
-  def rule(id = "smell", **fields)
-    data = { "question" => "Does this code smell?", "paths" => ["app/**/*.rb"], "message" => "Smells." }
-    Judgelint::Rule.new(data.merge(fields.transform_keys(&:to_s)), source: ".judgelint/rules/#{id}.md")
-  end
 end
