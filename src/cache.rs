@@ -7,14 +7,15 @@
 //! Opening it indexes the keys and leaves the probabilities on disk until
 //! they're asked for. New answers are appended, and a later record replaces
 //! an earlier one with the same key. A record cut short by a killed run is
-//! dropped before the next append.
+//! dropped before the next append. A file that isn't a cache is an error,
+//! never overwritten.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::unix::fs::FileExt;
 use std::sync::Mutex;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 pub type Key = [u8; 32];
@@ -28,7 +29,7 @@ pub struct Cache {
     file: Option<File>,
     /// Keys, sorted, each with its probabilities' offset and count.
     index: Vec<(Key, u64)>,
-    /// Where the last whole record ends, or 0 when the file isn't a cache.
+    /// Where the last whole record ends, or 0 when the file is new or empty.
     end: u64,
     out: Mutex<Option<BufWriter<File>>>,
 }
@@ -102,10 +103,13 @@ impl Cache {
 /// and where its last whole record ends.
 fn index(file: &File) -> Result<(Vec<(Key, u64)>, u64)> {
     let length = file.metadata()?.len();
+    if length == 0 {
+        return Ok((Vec::new(), 0));
+    }
     let mut reader = BufReader::with_capacity(1 << 20, file);
     let mut header = [0u8; 8];
     if reader.read_exact(&mut header).is_err() || &header != HEADER {
-        return Ok((Vec::new(), 0));
+        bail!("it isn't a judgelint cache; delete it to start over");
     }
     let mut index: Vec<(Key, u64)> = Vec::new();
     let mut at = HEADER.len() as u64;
