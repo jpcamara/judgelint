@@ -1,18 +1,15 @@
 name: Native gems
 
-# Builds the Spinel binary on each platform, runs the test suite against it,
-# and packages the platform gems plus the plain Ruby one, uploaded as the
-# run's artifacts. Run it by hand or by pushing a v* tag. A tag also gets a
-# GitHub release with each binary, for install.sh, and updates the formula
-# in jpcamara/homebrew-tap.
+# Builds the binary on each platform, runs the tests against it, and packages
+# the platform gems plus the plain one, uploaded as the run's artifacts. It
+# runs on pull requests, by hand, and on v* tags. A tag also gets a GitHub
+# release with each binary, for install.sh, and updates the formula in
+# jpcamara/homebrew-tap.
 on:
+  pull_request:
   workflow_dispatch:
   push:
     tags: ["v*"]
-
-env:
-  # The Spinel commit the binaries are built with.
-  SPINEL_REF: 0b2f0166003cf9aeb1b266c6a6fc6b06c766edfc
 
 jobs:
   native:
@@ -27,9 +24,8 @@ jobs:
           - { os: ubuntu-22.04, platform: x86_64-linux, target: x86_64-unknown-linux-gnu }
           - { os: ubuntu-22.04-arm, platform: aarch64-linux, target: aarch64-unknown-linux-gnu }
     env:
-      # The oldest macOS the binary runs on; Homebrew's OpenSSL on these
-      # runners is built for the runner's own release.
-      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.os == 'macos-15-intel' && '15.0' || '14.0' }}
+      # The oldest macOS the binary runs on.
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -38,31 +34,17 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: true
 
-      - name: Install OpenSSL
-        run: |
-          if [ "$RUNNER_OS" = macOS ]; then
-            brew install openssl@3 coreutils
-            echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
-          else
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends libssl-dev
-          fi
+      - uses: dtolnay/rust-toolchain@stable
 
-      - name: Build Spinel
-        run: |
-          git clone --filter=blob:none https://github.com/matz/spinel.git "$RUNNER_TEMP/spinel"
-          cd "$RUNNER_TEMP/spinel"
-          git checkout "$SPINEL_REF"
-          make deps
-          make -j"$(getconf _NPROCESSORS_ONLN)"
-          echo "SPINEL=$RUNNER_TEMP/spinel/bin/spinel" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Test the binary
-        run: bundle exec rake test:spinel
+      - name: Test
+        run: bundle exec rake test
 
       - name: Check it needs nothing beyond the system's libraries
         run: |
-          if [ "$RUNNER_OS" = macOS ]; then otool -L build/judgelint; else ldd build/judgelint; fi
-          ! { otool -L build/judgelint 2>/dev/null || ldd build/judgelint; } | grep -i -E 'ssl|crypto'
+          if [ "$RUNNER_OS" = macOS ]; then otool -L target/release/judgelint; else ldd target/release/judgelint; fi
+          ! { otool -L target/release/judgelint 2>/dev/null || ldd target/release/judgelint; } | grep -i -E 'ssl|crypto'
 
       - name: Package
         run: |
@@ -77,7 +59,7 @@ jobs:
       - name: Archive the binary
         run: |
           mkdir -p dist
-          tar --no-xattrs -czf "dist/judgelint-${{ matrix.target }}.tar.gz" -C build judgelint
+          tar --no-xattrs -czf "dist/judgelint-${{ matrix.target }}.tar.gz" -C target/release judgelint
 
       - uses: actions/upload-artifact@v4
         with:
