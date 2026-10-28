@@ -514,16 +514,6 @@ class CLITest < Minitest::Test
 
   private
 
-  def in_smelly_project(&)
-    in_project do |dir|
-      write_rule("smell")
-      write("app/bad.rb", "SMELL\n")
-      write("app/good.rb", "fine\n")
-      write("lib/ignored.rb", "SMELL\n")
-      yield dir
-    end
-  end
-
   def runners
     { "rust" => ->(args, **opts) { run_command([BINARY], args, **opts) } }
   end
@@ -540,17 +530,5 @@ class CLITest < Minitest::Test
   def run_command(command, args, api_base: @server.base, model: {}, config: {}, extra_env: {})
     out, err, status = Open3.capture3(env(api_base, model, config).merge(extra_env), *command, *args, "--no-cache")
     [status.exitstatus, out, err]
-  end
-
-  # Commits the project on main, as a repository judgelint can diff against.
-  def git_repo
-    git("init", "-q", "-b", "main")
-    git("-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A")
-    git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "start")
-  end
-
-  def git(*args)
-    _out, err, status = Open3.capture3("git", *args)
-    raise "git #{args.join(' ')}: #{err}" unless status.success?
   end
 end

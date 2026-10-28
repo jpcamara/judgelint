@@ -123,17 +123,31 @@ class MoreCLITest < Minitest::Test
     end
   end
 
-  private
+  def test_pr_reads_the_base_branch_from_each_ci
+    in_smelly_project do |dir|
+      git_repo
+      git("branch", "develop")
+      git("branch", "trunk")
+      git("init", "--bare", "-q", "#{dir}/origin.git")
+      git("remote", "add", "origin", "#{dir}/origin.git")
+      git("push", "-q", "origin", "main", "develop", "trunk")
+      write("app/good.rb", "SMELL\n")
+      unset = %w[JUDGELINT_BASE_BRANCH GITHUB_BASE_REF CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+                 BUILDKITE_PULL_REQUEST_BASE_BRANCH BITBUCKET_PR_DESTINATION_BRANCH
+                 SYSTEM_PULLREQUEST_TARGETBRANCH].to_h { |name| [name, nil] }
+      # Azure names a full ref, and Buildkite says "false" outside a pull request.
+      [{ "SYSTEM_PULLREQUEST_TARGETBRANCH" => "refs/heads/develop" },
+       { "BUILDKITE_PULL_REQUEST_BASE_BRANCH" => "false", "SYSTEM_PULLREQUEST_TARGETBRANCH" => "trunk" },
+       { "JUDGELINT_BASE_BRANCH" => "trunk", "GITHUB_BASE_REF" => "nowhere" }].each do |ci|
+        status, out, err = judgelint("--pr", env: unset.merge(ci))
 
-  def in_smelly_project(&)
-    in_project do |dir|
-      write_rule("smell")
-      write("app/bad.rb", "SMELL\n")
-      write("app/good.rb", "fine\n")
-      write("lib/ignored.rb", "SMELL\n")
-      yield dir
+        assert_equal 1, status, "#{ci}: #{err}"
+        assert_match(/^1 file, 1 violations$/, out, ci.to_s)
+      end
     end
   end
+
+  private
 
   def runners
     { "rust" => ->(args, **opts) { run_command([BINARY], args, **opts) } }
@@ -151,17 +165,5 @@ class MoreCLITest < Minitest::Test
   def run_command(command, args, api_base: @server.base, model: {}, config: {}, extra_env: {})
     out, err, status = Open3.capture3(env(api_base, model, config).merge(extra_env), *command, *args, "--no-cache")
     [status.exitstatus, out, err]
-  end
-
-  # Commits the project on main, as a repository judgelint can diff against.
-  def git_repo
-    git("init", "-q", "-b", "main")
-    git("-c", "user.name=t", "-c", "user.email=t@example.com", "add", "-A")
-    git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "start")
-  end
-
-  def git(*args)
-    _out, err, status = Open3.capture3("git", *args)
-    raise "git #{args.join(' ')}: #{err}" unless status.success?
   end
 end
