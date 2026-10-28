@@ -58,7 +58,7 @@ impl Cache {
         let place = self.index[i].1;
         let mut bytes = vec![0u8; (place & ((1 << COUNT_BITS) - 1)) as usize * 8];
         file.read_exact_at(&mut bytes, place >> COUNT_BITS)?;
-        Ok(Some(bytes.chunks_exact(8).map(|b| f64::from_le_bytes(b.try_into().unwrap())).collect()))
+        Ok(Some(bytes.as_chunks::<8>().0.iter().map(|b| f64::from_le_bytes(*b)).collect()))
     }
 
     pub fn put(&self, key: &Key, values: &[f64]) -> Result<()> {
