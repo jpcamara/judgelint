@@ -17,8 +17,9 @@ curl -fsSL https://raw.githubusercontent.com/jpcamara/judgelint/main/install.sh 
 The script installs to `~/.local/bin`, or to `$JUDGELINT_INSTALL_DIR`. The
 binaries are on the [releases page](https://github.com/jpcamara/judgelint/releases)
 for macOS and Linux, on arm64 and x86_64. Linux needs glibc 2.35 or newer
-(Ubuntu 22.04, Debian 12). `gem install judgelint` works too, and runs as
-plain Ruby on Windows.
+(Ubuntu 22.04, Debian 12). `gem install judgelint` installs the same binary.
+Anywhere else, build it with Rust:
+`cargo install --git https://github.com/jpcamara/judgelint`.
 
 ## Getting started
 
@@ -247,7 +248,7 @@ ignore: ["vendor/**"]    # files no rule checks, and READMEs that aren't specs
 max_cost_usd: 1.00       # refuse a run estimated to cost more, unless --yes
 ```
 
-Every run prints what it cost. Answers are cached in `.judgelint/cache.json`,
+Every run prints what it cost. Answers are cached in `.judgelint/cache.bin`,
 so a file that hasn't changed costs nothing. Commit the cache to share it.
 `judgelint --help` lists the flags.
 
@@ -276,16 +277,13 @@ models:
 
 ## Building from source
 
-judgelint is written in Ruby and compiled with
-[Spinel](https://github.com/matz/spinel).
+judgelint is written in Rust. The end-to-end tests are in Ruby.
 
 ```sh
+cargo build --release       # builds target/release/judgelint
 bundle install
-bundle exec rake test
-git clone https://github.com/matz/spinel ../spinel && (cd ../spinel && make deps && make)
-SPINEL=../spinel/bin/spinel bundle exec rake spinel        # builds build/judgelint
-SPINEL=../spinel/bin/spinel bundle exec rake test:spinel   # runs the tests against the binary
-bundle exec rake example                                   # asks Jev about the demo app again
+bundle exec rake test       # runs the Rust tests, then the end-to-end tests against the binary
+bundle exec rake example    # asks Jev about the demo app again
 ```
 
 ## Credits
