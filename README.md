@@ -16,9 +16,9 @@ curl -fsSL https://raw.githubusercontent.com/jpcamara/judgelint/main/install.sh 
 
 The script installs to `~/.local/bin`, or to `$JUDGELINT_INSTALL_DIR`. The
 binaries are on the [releases page](https://github.com/jpcamara/judgelint/releases)
-for macOS and Linux, on arm64 and x86_64. Linux needs glibc 2.35 or newer
-(Ubuntu 22.04, Debian 12). `gem install judgelint` installs the same binary.
-Anywhere else, build it with Rust:
+for macOS and Linux, on arm64 and x86_64. Linux needs glibc 2.34 or newer
+(Ubuntu 22.04, Debian 12, RHEL 9). `gem install judgelint` installs the same
+binary. Anywhere else, build it with Rust:
 `cargo install --git https://github.com/jpcamara/judgelint`.
 
 ## Getting started
