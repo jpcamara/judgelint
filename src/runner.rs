@@ -244,11 +244,12 @@ impl<'a> Runner<'a> {
     }
 
     /// The directories directory rules govern; with a change, those it
-    /// touched, by changing, adding or deleting a file in them.
+    /// touched, by changing, adding or deleting a file in them, or a link
+    /// that is the directory.
     pub fn plan_directories(&self, directories: &[String], changes: Option<&Changes>) -> Result<Vec<Job>> {
         let kept = |dir: &&String| {
             let prefix = format!("{dir}/");
-            changes.is_none_or(|changes| changes.keys().any(|path| path.starts_with(&prefix)))
+            changes.is_none_or(|changes| changes.keys().any(|path| path == *dir || path.starts_with(&prefix)))
         };
         let planned: Vec<Result<Vec<Job>>> = directories
             .iter()
@@ -945,5 +946,21 @@ mod tests {
         let jobs = runner.prepare_file("app/a.rb", String::new(), Some(&Changed::All)).unwrap();
         let asked: Vec<usize> = jobs[0].questions.by_rule.iter().map(|(rule, _)| *rule).collect();
         assert_eq!(asked, [0], "a window rule has no lines to ask about");
+    }
+
+    #[test]
+    fn a_change_to_a_link_that_is_a_directory_touches_it() {
+        let (config, rules) = (config(json!({})), [rule("one-thing", "scope: directory\npaths: [\"app/*\"]")]);
+        let dir = TempDir::new();
+        dir.write("app/pay/a.rb", "x\n");
+        let project = dir.project();
+        let runner = Runner::new(&project, &config, &rules);
+        let planned = |path: &str| {
+            let changes = Changes::from([(path.to_string(), Changed::All)]);
+            runner.plan_directories(&["app/pay".to_string()], Some(&changes)).unwrap().len()
+        };
+        assert_eq!(planned("app/pay"), 1, "the link itself");
+        assert_eq!(planned("app/pay/a.rb"), 1);
+        assert_eq!(planned("app/payments.rb"), 0);
     }
 }

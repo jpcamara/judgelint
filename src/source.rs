@@ -61,7 +61,8 @@ impl Source {
     ) -> Result<Source> {
         let mut files = Vec::new();
         let mut total = 0;
-        for file in project.expand(&[format!("{dir}/**/*")])? {
+        // A directory's name is a path, not a pattern: `pay[1]` isn't `pay1`.
+        for file in project.expand(&[format!("{}/**/*", globset::escape(dir))])? {
             match project.read_to_send(&file)? {
                 Contents::Text(text) if total + text.len() as u64 <= MAX_FILE_BYTES => {
                     total += text.len() as u64;
@@ -237,5 +238,14 @@ mod tests {
         }
         let big = source(false);
         assert!(big.unjudgeable && big.files == Some(Vec::new()), "4 MB together at most");
+    }
+
+    #[test]
+    fn a_directorys_name_is_not_a_pattern() {
+        let dir = TempDir::new();
+        dir.write("a/pay[1]/bad.rb", "x\n");
+        dir.write("a/pay1/other.rb", "y\n");
+        let source = Source::directory(&dir.project(), "a/pay[1]", None, Arc::default(), true).unwrap();
+        assert_eq!(source.files, Some(vec!["a/pay[1]/bad.rb".to_string()]));
     }
 }

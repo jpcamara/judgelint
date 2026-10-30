@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rayon::prelude::*;
 
@@ -165,6 +165,12 @@ impl App {
         let project = Project::open(Path::new("."), holds)?;
         let (config, rules) = self.load_rules(&project, trusted.as_ref())?;
         let changes = base.as_deref().map(|base| changes::since(base, change.pr)).transpose()?;
+        if change.pr && changes.as_ref().is_some_and(|c| c.contains_key(config::CACHE)) {
+            eprintln!(
+                "judgelint: this pull request changes {}. This run doesn't use its answers, but once it's merged they decide later checks.",
+                config::CACHE
+            );
+        }
         let candidates = check_paths(&project, &rules, &paths, changes.as_ref())?;
         if !rules.iter().any(|r| r.is_directory() || !r.context.is_empty()) {
             project.release();
@@ -339,11 +345,10 @@ impl App {
 
     fn init(&mut self) -> Result<i32> {
         let path = "CONVENTIONS.md";
-        if std::path::Path::new(path).exists() {
-            writeln!(self.out, "exists  {path}")?;
-        } else {
-            std::fs::write(path, include_str!("conventions.md"))?;
+        if create_new(Path::new(path), include_str!("conventions.md"))? {
             writeln!(self.out, "create  {path}")?;
+        } else {
+            writeln!(self.out, "exists  {path}")?;
         }
         eprintln!("Next: set TYPESAFE_API_KEY, then run `judgelint test` to see the examples judged.");
         Ok(0)
@@ -440,10 +445,35 @@ fn check_directories(project: &Project, rules: &[Rule], paths: &[String]) -> Res
     Ok(directories)
 }
 
+/// Writes a new file at +path+, or leaves what's there, even a link to
+/// nothing, and says false.
+fn create_new(path: &Path, contents: &str) -> Result<bool> {
+    match std::fs::OpenOptions::new().write(true).create_new(true).open(path) {
+        Ok(mut file) => {
+            file.write_all(contents.as_bytes())?;
+            Ok(true)
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e).with_context(|| format!("Couldn't create {}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::TempDir;
+
+    #[test]
+    fn init_writes_only_a_new_file() {
+        let dir = TempDir::new();
+        let path = dir.path("CONVENTIONS.md");
+        std::os::unix::fs::symlink("../outside.md", &path).unwrap();
+        assert!(!create_new(Path::new(&path), "x").unwrap(), "a link to nothing is kept");
+        assert!(!Path::new(&dir.path("../outside.md")).exists());
+        std::fs::remove_file(&path).unwrap();
+        assert!(create_new(Path::new(&path), "x").unwrap());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "x");
+    }
 
     #[test]
     fn a_change_keeps_every_changed_path_but_deletions_and_directories() {
