@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.1 (unreleased)
+## 0.2.1 (2026-10-29)
 
 Security fixes, after two reviews of 0.2.0. A pull request could change the
 config or specs to send code and environment variables to its own server,
