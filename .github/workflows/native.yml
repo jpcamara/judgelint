@@ -36,6 +36,9 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
       # Install exactly what Gemfile.lock says.
       BUNDLE_FROZEN: "true"
+      # Builds with cargo-auditable, which embeds the dependency list in the
+      # binary, so `cargo audit bin` can check an installed one.
+      AUDITABLE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -56,14 +59,29 @@ jobs:
           rustup toolchain install
           rustup show active-toolchain
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      # Tag builds, which publish, skip it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3 # zizmor: ignore[cache-poisoning]
         if: "!startsWith(github.ref, 'refs/tags/')"
+
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-auditable@0.7.7,cargo-deny@0.20.2,zizmor@1.30.1
 
       - name: Lint
         if: matrix.platform == 'x86_64-linux'
         run: |
           cargo fmt --check
           cargo clippy --release --locked --all-targets -- -D warnings
+          # Advisories, licenses and sources of the dependencies (deny.toml).
+          cargo deny --locked check
+          zizmor --offline .github/workflows
+
+      - name: Build with the oldest Rust Cargo.toml allows
+        if: matrix.platform == 'x86_64-linux'
+        run: |
+          version=$(sed -n 's/^rust-version = "\(.*\)"//p' Cargo.toml)
+          rustup toolchain install "$version" --profile minimal
+          cargo "+$version" check --locked --all-targets
 
       - name: Test
         run: bundle exec rake test
@@ -144,10 +162,12 @@ jobs:
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --generate-notes ./*
           gh release edit "$GITHUB_REF_NAME" --draft=false
 
+  # In the release environment, which holds the tap's deploy key.
   homebrew:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: release
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: read
     steps:
@@ -161,7 +181,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh release download "$GITHUB_REF_NAME" --pattern SHA256SUMS --dir dist
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # It keeps the key, to push the formula; this job uploads nothing.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
         with:
           repository: jpcamara/homebrew-tap
           ssh-key: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}

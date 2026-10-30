@@ -6,9 +6,10 @@ require "json"
 
 BINARY = "target/release/judgelint"
 
-desc "Build the binary with Cargo"
+desc "Build the binary with Cargo; with AUDITABLE set, with cargo-auditable, which embeds the dependency list"
 task :build do
-  sh "cargo", "build", "--release", "--locked"
+  build = ENV["AUDITABLE"] ? %w[cargo auditable build] : %w[cargo build]
+  sh(*build, "--release", "--locked")
 end
 
 desc "Run the Rust unit tests"

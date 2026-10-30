@@ -7,8 +7,9 @@
 # JUDGELINT_INSTALL_DIR picks where it goes (default ~/.local/bin).
 #
 # This script checks each download against the release's SHA256SUMS. Releases
-# after v0.2.0 also carry build provenance. To check that a download was built
-# by this repo's release workflow from the tagged source, use the GitHub CLI:
+# after v0.2.0 also carry build provenance, and with the GitHub CLI installed
+# and signed in, the script checks that the download was built by this repo's
+# release workflow from the tagged source. By hand:
 #
 #   gh attestation verify judgelint-aarch64-apple-darwin.tar.gz --repo jpcamara/judgelint
 set -eu
@@ -65,6 +66,15 @@ download "$base/$asset" "$tmp/$asset"
 download "$base/SHA256SUMS" "$tmp/SHA256SUMS"
 expected="$(grep " $asset\$" "$tmp/SHA256SUMS" | cut -d " " -f 1)"
 [ -n "$expected" ] && [ "$expected" = "$(sha256 "$tmp/$asset")" ] || fail "$asset doesn't match its checksum"
+case "$version" in
+  v0.1.* | v0.2.0) ;;
+  *)
+    if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+      gh attestation verify "$tmp/$asset" --repo "$repo" >/dev/null ||
+        fail "$asset wasn't built by $repo's release workflow"
+    fi
+    ;;
+esac
 
 tar -xzf "$tmp/$asset" -C "$tmp"
 "$tmp/judgelint" --version >/dev/null 2>&1 ||
