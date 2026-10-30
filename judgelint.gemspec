@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["rubygems_mfa_required"] = "true"
 
-  # The platform gems add the binary and lib/rubygems_plugin.rb (see the Rakefile).
+  # The platform gems add the binary (see the Rakefile).
   spec.files = Dir["exe/*", "README.md", "CHANGELOG.md", "LICENSE"]
   spec.bindir = "exe"
   spec.executables = ["judgelint"]

@@ -21,6 +21,10 @@ for macOS and Linux, on arm64 and x86_64. Linux needs glibc 2.34 or newer
 binary. Anywhere else, build it with Rust:
 `cargo install --git https://github.com/jpcamara/judgelint`.
 
+Each release's archives and gems carry a build attestation from the GitHub
+Actions run that built them, from the tagged source. To check one:
+`gh attestation verify judgelint-aarch64-apple-darwin.tar.gz --repo jpcamara/judgelint`.
+
 ## Getting started
 
 Write your conventions as bullets in a `CONVENTIONS.md`:
@@ -237,6 +241,39 @@ Actions, GitLab, Buildkite, Bitbucket, Azure Pipelines,
 `JUDGELINT_BASE_BRANCH`, or `gh`. Fetch enough history for git to find the
 merge base.
 
+Under `--base` or `--pr`, a changed file judgelint can't judge fails the
+run: one too large for the model, or one the model refused to answer about.
+
+### Pull requests from people you don't trust
+
+`--pr` reads `.judgelint.yml`, the specs, and `.judgelint/cache.bin` from the
+base branch, not from the pull request, so a pull request can't change the
+rules it's checked against, where its code is sent, or the answers it's
+judged by. New or changed conventions apply once they're merged. Run
+judgelint with `--pr` on pull requests; a plain `judgelint` or `--base` run
+uses the checked-out files as they are.
+
+Even so, give the job only the model's API key. The pull request's code is
+still what's being read, and the model can be argued with: a comment in the
+code can sway its answer. judgelint is a reviewer, not a security gate.
+
+## What gets sent
+
+For each file a rule checks, the model gets the file's path and its whole
+contents, numbered, with the spec's text and any `context:` files the rule
+names. A directory rule sends every file in the directory. Nothing else on
+your machine is read or sent:
+
+- Only files inside the directory judgelint runs in, and none reached
+  through a link that leads out of it.
+- In a git repository, only files git tracks or would add, never ignored
+  ones.
+- No binary files, and nothing over 4 MB.
+
+Requests go to the model's API over https, or plain http to a server on
+your own machine. The API key goes only to its own provider's address: a
+provider pointed somewhere else with `api_base` needs its own `api_key_env`.
+
 ## Configuration
 
 judgelint runs without a config file. `.judgelint.yml` has four settings:
@@ -247,6 +284,10 @@ threshold: 0.7
 ignore: ["vendor/**"]    # files no rule checks, and READMEs that aren't specs
 max_cost_usd: 1.00       # refuse a run estimated to cost more, unless --yes
 ```
+
+A model judgelint has no price for, like any model on OpenRouter, needs a
+`price_per_million` (see below) before a run will spend money on it, or
+`--yes`. A server on your own machine costs nothing.
 
 Every run prints what it cost. Answers are cached in `.judgelint/cache.bin`,
 so a file that hasn't changed costs nothing. Commit the cache to share it.
@@ -270,7 +311,7 @@ For any other System One or Decisions endpoint, add a mapping to `models`:
 models:
   - api_base: https://gateway.example.com/${TEAM}   # ${VAR} reads the environment
     model: some-decider
-    api_key_env: GATEWAY_KEY
+    api_key_env: GATEWAY_KEY                         # sent only to this api_base
     # path: /v1/systemone   protocol: system_one|decisions   auth: bearer|basic|none|header:<name>
     # headers: {}   provider_options: {}   price_per_million: 0.04   batch_size: 32
 ```

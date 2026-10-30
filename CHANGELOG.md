@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.2.1 (unreleased)
+
+Security fixes, after two reviews of 0.2.0. A pull request could change the
+config or specs to send code and environment variables to its own server,
+read files outside the project, or pass with answers it made up.
+
+- `--pr` reads `.judgelint.yml`, the specs and the cache from the base
+  branch, not the pull request.
+- Every file sent to a model, including `context:` files and a directory
+  rule's files, must be inside the project, not reached through a link that
+  leaves it, not ignored by git, not binary, and at most 4 MB.
+- A provider pointed at another `api_base` doesn't get the provider's key;
+  set `api_key_env` for it. Its answers are cached apart.
+- Plain http goes only to localhost. Redirects aren't followed. Responses
+  are capped at 16 MB, and a request at 60 seconds.
+- Under `--base` or `--pr`, a changed file that's skipped or refused fails
+  the run.
+- An added line that looks like a diff header no longer hides changed lines.
+- Malformed answers and cached values that aren't probabilities are errors
+  or misses, not passes.
+- A model with no price fails the cost check unless you pass `--yes` or set
+  `price_per_million`. Servers on localhost cost nothing.
+- Errors show the URL as configured, before `${VAR}` is filled in.
+- Releases carry build attestations, are built with a pinned Rust, and push
+  the gems from CI. The gem no longer replaces its command with a link to the
+  binary, which could break after an uninstall.
+
 ## 0.2.0 (2026-10-28)
 
 - judgelint is written in Rust now. The gem carries the binary for macOS and
