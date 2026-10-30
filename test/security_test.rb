@@ -112,7 +112,7 @@ class SecurityTest < Minitest::Test
     end
   end
 
-  def test_pr_checks_against_the_base_branchs_config_rules_and_cache
+  def test_pr_uses_the_base_branchs_config_and_its_own_rules_and_cache
     attacker = StubSystemOne.new { 0.0 }
     in_smelly_project do |dir|
       write_config
@@ -134,9 +134,8 @@ class SecurityTest < Minitest::Test
       assert_match(/^1 file, 1 violations$/, out)
       assert_empty attacker.requests, "the pull request's config isn't used"
       assert_equal ["Bearer secret"], @server.requests.map { |r| r[:authorization] }
-      refute_includes @server.requests.first[:payload].to_s, "Context", "nor its rules"
-      assert_equal "jlcache1", File.read(".judgelint/cache.bin"), "and the checkout's cache is left alone"
-      assert_match(%r{this pull request changes \.judgelint/cache\.bin}, err, "and says its cache changed")
+      assert_includes @server.requests.first[:payload].to_s, "Context", "but its rules are"
+      assert_operator File.size(".judgelint/cache.bin"), :>, 8, "and its cache"
     end
   ensure
     attacker&.stop
@@ -177,22 +176,25 @@ class SecurityTest < Minitest::Test
     end
   end
 
-  def test_pr_leaves_the_checkouts_cache_alone
-    Dir.mktmpdir("judgelint-outside") do |outside|
-      File.write(File.join(outside, "cache.bin"), "keep me")
-      in_smelly_project do |dir|
-        write_config
-        git_repo
-        git("init", "--bare", "-q", "#{dir}/origin.git")
-        git("remote", "add", "origin", "#{dir}/origin.git")
-        git("push", "-q", "origin", "main")
-        FileUtils.rm_rf(".judgelint")
-        File.symlink(outside, ".judgelint")
-        _out, err, status = Open3.capture3({ "GITHUB_BASE_REF" => "main" }, BINARY, "--pr")
+  def test_pr_asks_again_only_about_what_a_push_changed
+    in_smelly_project do |dir|
+      write_config
+      git_repo
+      git("init", "--bare", "-q", "#{dir}/origin.git")
+      git("remote", "add", "origin", "#{dir}/origin.git")
+      git("push", "-q", "origin", "main")
+      git("checkout", "-q", "-b", "change")
+      write("app/new.rb", "SMELL\n")
+      git("add", "-A")
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change")
+      env = { "JUDGELINT_TEST_KEY" => "secret", "GITHUB_BASE_REF" => "main" }
+      Open3.capture3(env, BINARY, "--pr")
+      asked = @server.requests.size
+      _out, err, status = Open3.capture3(env, BINARY, "--pr")
 
-        assert_equal 0, status.exitstatus, err
-        assert_equal "keep me", File.read(File.join(outside, "cache.bin"))
-      end
+      assert_equal 1, status.exitstatus, err
+      assert_operator asked, :>, 0
+      assert_equal asked, @server.requests.size, "the second run's answers are cached"
     end
   end
 

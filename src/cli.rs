@@ -74,7 +74,7 @@ struct Change {
     #[arg(long, value_name = "REF", conflicts_with = "pr")]
     base: Option<String>,
     /// Check a pull request: its commits since its base branch, from CI
-    /// variables or the gh CLI, against that branch's config, rules and cache
+    /// variables or the gh CLI, with that branch's config
     #[arg(long)]
     pr: bool,
 }
@@ -151,13 +151,13 @@ impl App {
             bail!("--base and --pr can't be used together");
         }
         let base = if change.pr { Some(changes::pr_base()?) } else { change.base };
-        // A pull request is checked against its base branch's rules, config
-        // and cache, so it can't change what it's checked against.
+        // A pull request is checked with its base branch's config, so it
+        // can't change where its code is sent or which key goes with it.
         let trusted = match (&base, change.pr) {
             (Some(base), true) => Some(Commit::new(Path::new("."), base)?),
             _ => None,
         };
-        let loading = self.load_cache_early(trusted.as_ref());
+        let loading = self.load_cache_early();
         // A pull request is its commits: what else is in the checkout, like
         // files an earlier step wrote, isn't part of it, whatever its
         // .gitignore says.
@@ -165,12 +165,6 @@ impl App {
         let project = Project::open(Path::new("."), holds)?;
         let (config, rules) = self.load_rules(&project, trusted.as_ref())?;
         let changes = base.as_deref().map(|base| changes::since(base, change.pr)).transpose()?;
-        if change.pr && changes.as_ref().is_some_and(|c| c.contains_key(config::CACHE)) {
-            eprintln!(
-                "judgelint: this pull request changes {}. This run doesn't use its answers, but once it's merged they decide later checks.",
-                config::CACHE
-            );
-        }
         let candidates = check_paths(&project, &rules, &paths, changes.as_ref())?;
         if !rules.iter().any(|r| r.is_directory() || !r.context.is_empty()) {
             project.release();
@@ -246,7 +240,7 @@ impl App {
     }
 
     fn test(&mut self, ids: Vec<String>) -> Result<i32> {
-        let loading = self.load_cache_early(None);
+        let loading = self.load_cache_early();
         let project = Project::open(Path::new("."), Holds::WorkingTree)?;
         let (config, mut rules) = self.load_rules(&project, None)?;
         if !ids.is_empty() {
@@ -356,21 +350,14 @@ impl App {
 
     fn load_rules(&self, project: &Project, commit: Option<&Commit>) -> Result<(Config, Vec<Rule>)> {
         let config = Config::load(project, self.options.config.as_deref(), self.options.model.as_deref(), commit)?;
-        let rules = spec::discover(project, config.threshold, &config.ignore, commit)?;
+        let rules = spec::discover(project, config.threshold, &config.ignore)?;
         Ok((config, rules))
     }
 
     /// Starts reading the cache's index while the files are found and read.
-    /// With a commit, the cache is the commit's, kept in memory: answers a
-    /// pull request brings along could say anything, and the checkout's own
-    /// cache is left as it is.
-    fn load_cache_early(&self, commit: Option<&Commit>) -> Option<JoinHandle<Result<Cache>>> {
+    fn load_cache_early(&self) -> Option<JoinHandle<Result<Cache>>> {
         if self.options.no_cache {
             return None;
-        }
-        if let Some(commit) = commit {
-            let commit = commit.clone();
-            return Some(std::thread::spawn(move || Cache::in_memory(commit.read(config::CACHE)?.unwrap_or_default())));
         }
         Path::new(config::CACHE).is_file().then(|| std::thread::spawn(|| Cache::open(Some(config::CACHE))))
     }
