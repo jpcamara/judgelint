@@ -125,6 +125,8 @@ class SecurityTest < Minitest::Test
       write_rule("smell", extra: "context: [\"app/good.rb\"]")
       write(".judgelint/cache.bin", "jlcache1")
       write_config(server: attacker, model: { "api_key_env" => "AWS_SECRET_ACCESS_KEY" })
+      git("add", "-A")
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change")
       out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret", "AWS_SECRET_ACCESS_KEY" => "aws",
                                           "GITHUB_BASE_REF" => "main" }, BINARY, "--pr")
 
@@ -136,6 +138,29 @@ class SecurityTest < Minitest::Test
     end
   ensure
     attacker&.stop
+  end
+
+  def test_pr_judges_its_commits_not_whatever_else_is_in_the_checkout
+    in_smelly_project do |dir|
+      write(".gitignore", "app/local.rb\n")
+      write_config
+      git_repo
+      git("init", "--bare", "-q", "#{dir}/origin.git")
+      git("remote", "add", "origin", "#{dir}/origin.git")
+      git("push", "-q", "origin", "main")
+      git("checkout", "-q", "-b", "change")
+      # The pull request un-ignores a file an earlier CI step wrote.
+      write(".gitignore", "")
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "un-ignore")
+      write("app/local.rb", "SMELL TOKEN=hunter2\n")
+      write("app/good.rb", "SMELL uncommitted\n")
+      out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret", "GITHUB_BASE_REF" => "main" },
+                                        BINARY, "--pr")
+
+      assert_equal 0, status.exitstatus, err
+      assert_match(/^0 files, 0 violations$/, out)
+      assert_empty @server.requests
+    end
   end
 
   def test_pr_wont_write_the_cache_through_a_linked_directory

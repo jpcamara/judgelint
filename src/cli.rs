@@ -140,9 +140,13 @@ impl App {
             use_cache_from(commit)?;
         }
         let loading = self.load_cache_early();
-        let project = Project::open(Path::new("."), Holds::WorkingTree)?;
+        // A pull request is its commits: what else is in the checkout, like
+        // files an earlier step wrote, isn't part of it, whatever its
+        // .gitignore says.
+        let holds = if self.options.pr { Holds::Tracked } else { Holds::WorkingTree };
+        let project = Project::open(Path::new("."), holds)?;
         let (config, rules) = self.load_rules(&project, trusted.as_ref())?;
-        let changes = base.as_deref().map(changes::since).transpose()?;
+        let changes = base.as_deref().map(|base| changes::since(base, self.options.pr)).transpose()?;
         let candidates = check_paths(&project, &rules, &paths, changes.as_ref())?;
         if !rules.iter().any(|r| r.is_directory() || !r.context.is_empty()) {
             project.release();

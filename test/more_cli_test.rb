@@ -133,6 +133,7 @@ class MoreCLITest < Minitest::Test
       git("remote", "add", "origin", "#{dir}/origin.git")
       git("push", "-q", "origin", "main", "develop", "trunk")
       write("app/good.rb", "SMELL\n")
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "change")
       unset = %w[JUDGELINT_BASE_BRANCH GITHUB_BASE_REF CI_MERGE_REQUEST_TARGET_BRANCH_NAME
                  BUILDKITE_PULL_REQUEST_BASE_BRANCH BITBUCKET_PR_DESTINATION_BRANCH
                  SYSTEM_PULLREQUEST_TARGETBRANCH].to_h { |name| [name, nil] }

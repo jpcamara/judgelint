@@ -37,30 +37,33 @@ const BASE_BRANCH_VARIABLES: [&str; 6] = [
     "SYSTEM_PULLREQUEST_TARGETBRANCH",
 ];
 
-/// Every line changed since the merge base with +reference+.
-pub fn since(reference: &str) -> Result<Changes> {
+/// Every line changed since the merge base with +reference+: in its commits
+/// alone when +committed+, as a pull request is, or with uncommitted work
+/// and new files too.
+pub fn since(reference: &str, committed: bool) -> Result<Changes> {
     check_ref(reference)?;
     let base = git_text(&["merge-base", reference, "HEAD"])?;
-    let diff = git_text(&[
-        "diff",
-        "-U0",
-        "--no-color",
-        "--no-ext-diff",
-        // No configured filter runs.
-        "--no-textconv",
-        "--relative",
-        "--diff-filter=d",
-        base.trim(),
-    ])?;
+    let compared: &[&str] = if committed { &[base.trim(), "HEAD"] } else { &[base.trim()] };
+    let diff = git_text(
+        &[
+            // No configured filter runs.
+            &["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--relative", "--diff-filter=d"],
+            compared,
+        ]
+        .concat(),
+    )?;
     let mut changed = parse_diff(&diff);
     // A changed file with no lines in the diff, like one .gitattributes
     // marks binary, is changed throughout.
-    let names = git_text(&["diff", "--name-only", "-z", "--relative", "--diff-filter=d", base.trim()])?;
+    let names = git_text(&[&["diff", "--name-only", "-z", "--relative", "--diff-filter=d"], compared].concat())?;
     for path in names.split('\0').filter(|p| !p.is_empty()) {
         changed.entry(path.to_string()).or_insert(Changed::All);
     }
-    for path in git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|p| !p.is_empty()) {
-        changed.insert(path.to_string(), Changed::All);
+    if !committed {
+        let new = git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+        for path in new.split('\0').filter(|p| !p.is_empty()) {
+            changed.insert(path.to_string(), Changed::All);
+        }
     }
     Ok(changed)
 }
