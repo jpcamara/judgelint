@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5 (unreleased)
+
+- When a checkout lacks the history to find where HEAD branched from,
+  `--pr` and `--base` say to fetch more instead of failing with an empty
+  `git merge-base failed:`.
+- `--pr` works in a clone of a single branch, which `--depth` makes. It
+  fetched the base branch without updating `origin/<branch>`.
+
 ## 0.2.4 (2026-10-30)
 
 - On GitHub Actions' default checkout, `--pr` compares GitHub's merge

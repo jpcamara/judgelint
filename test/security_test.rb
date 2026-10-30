@@ -302,6 +302,53 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_pr_works_in_a_clone_of_one_branch
+    Dir.mktmpdir("judgelint-origin") do |origin|
+      in_smelly_project do |dir|
+        write_config
+        git_repo
+        git("init", "--bare", "-q", origin)
+        git("checkout", "-q", "-b", "change")
+        write("app/new.rb", "SMELL\n")
+        commit_all("change")
+        git("push", "-q", origin, "main", "change")
+        checkout = File.join(dir, "checkout")
+        git("clone", "-q", "--single-branch", "--branch", "change", "file://#{origin}", checkout)
+        Dir.chdir(checkout) do
+          out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret", "GITHUB_BASE_REF" => "main" },
+                                            BINARY, "--pr")
+
+          assert_equal 1, status.exitstatus, err
+          assert_match(/^1 file, 1 violations$/, out)
+        end
+      end
+    end
+  end
+
+  def test_pr_without_the_history_says_to_fetch_it
+    Dir.mktmpdir("judgelint-origin") do |origin|
+      in_smelly_project do |dir|
+        write_config
+        git_repo
+        git("init", "--bare", "-q", origin)
+        git("checkout", "-q", "-b", "change")
+        write("app/new.rb", "SMELL\n")
+        commit_all("change")
+        git("push", "-q", origin, "main", "change")
+        checkout = File.join(dir, "checkout")
+        git("clone", "-q", "--depth=1", "--branch", "change", "file://#{origin}", checkout)
+        Dir.chdir(checkout) do
+          _out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret", "GITHUB_BASE_REF" => "main" },
+                                             BINARY, "--pr")
+
+          assert_equal 2, status.exitstatus, err
+          assert_match(/fetch more history, like fetch-depth: 0/, err)
+          assert_empty @server.requests
+        end
+      end
+    end
+  end
+
   def test_base_and_pr_only_work_with_check
     in_smelly_project do
       [%w[test --pr], %w[--pr test], %w[rules --base main], %w[--base main rules]].each do |args|
