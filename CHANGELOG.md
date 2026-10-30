@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.3 (unreleased)
+## 0.2.3 (2026-10-30)
 
 `--pr` uses the pull request's own specs and cache again, and hardening
 from a fourth review.
