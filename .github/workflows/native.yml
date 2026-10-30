@@ -79,7 +79,7 @@ jobs:
       - name: Build with the oldest Rust Cargo.toml allows
         if: matrix.platform == 'x86_64-linux'
         run: |
-          version=$(sed -n 's/^rust-version = "\(.*\)"//p' Cargo.toml)
+          version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
           rustup toolchain install "$version" --profile minimal
           cargo "+$version" check --locked --all-targets
 
