@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.2 (unreleased)
+## 0.2.2 (2026-10-30)
 
 Fixes from a third review of 0.2.1, which found ways around its fixes.
 
