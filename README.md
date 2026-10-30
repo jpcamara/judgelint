@@ -243,20 +243,24 @@ A new file is
 all changed lines. Rules about a whole file (`scope: file`) still read the
 whole file when any of it changed, and a directory rule asks about a
 directory when a file in it was changed, added or deleted. Only `check`
-takes `--base` and `--pr`. `--pr` gets the base branch from GitHub
-Actions, GitLab, Buildkite, Bitbucket, Azure Pipelines,
-`JUDGELINT_BASE_BRANCH`, or `gh`. Fetch enough history for git to find the
-merge base.
+takes `--base` and `--pr`. `--pr` checks against `JUDGELINT_BASE_BRANCH`
+when it's set, or else the base branch that GitHub Actions, GitLab,
+Buildkite, Bitbucket, Azure Pipelines or `gh` names. git needs the history
+back to the merge base.
 
 Under `--base` or `--pr`, a changed file judgelint can't judge fails the
 run: one too large for the model, one the model refused to answer about,
 even in part, one that leads outside the project, or a binary one. Images,
 fonts, archives and other formats that are never code are left out instead.
 
-To keep answers between pushes, keep the cache in your CI's cache. On
-GitHub Actions:
+On GitHub Actions, check out the history without its file contents (git
+fetches the ones it needs), and keep the cache between pushes:
 
 ```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+    filter: blob:none
 - uses: actions/cache@v4
   with:
     path: .judgelint/cache.bin
@@ -264,6 +268,13 @@ GitHub Actions:
     restore-keys: judgelint-
 - run: judgelint --pr --format github
 ```
+
+A stacked pull request that targets its parent branch on GitHub needs
+nothing more. If it targets the main branch instead, set
+`JUDGELINT_BASE_BRANCH` to the parent branch and check out the pull
+request's own commit with `ref: ${{ github.event.pull_request.head.sha }}`.
+GitHub's default checkout merges the pull request into the branch it
+targets, which brings in commits the parent branch doesn't have yet.
 
 ### Pull requests from people you don't trust
 
