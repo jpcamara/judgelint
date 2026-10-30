@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "open3"
+require "fileutils"
 
 # What a project's files can make judgelint read, send, or trust.
 class SecurityTest < Minitest::Test
@@ -107,6 +108,56 @@ class SecurityTest < Minitest::Test
     end
   ensure
     attacker&.stop
+  end
+
+  def test_pr_wont_write_the_cache_through_a_linked_directory
+    Dir.mktmpdir("judgelint-outside") do |outside|
+      File.write(File.join(outside, "cache.bin"), "keep me")
+      in_smelly_project do |dir|
+        write_config
+        git_repo
+        git("init", "--bare", "-q", "#{dir}/origin.git")
+        git("remote", "add", "origin", "#{dir}/origin.git")
+        git("push", "-q", "origin", "main")
+        FileUtils.rm_rf(".judgelint")
+        File.symlink(outside, ".judgelint")
+        _out, err, status = Open3.capture3({ "GITHUB_BASE_REF" => "main" }, BINARY, "--pr")
+
+        assert_equal 2, status.exitstatus
+        assert_match(/isn't a directory/, err)
+        assert_equal "keep me", File.read(File.join(outside, "cache.bin"))
+      end
+    end
+  end
+
+  def test_a_changed_link_out_of_the_project_fails_a_change_check
+    Dir.mktmpdir("judgelint-outside") do |outside|
+      File.write(File.join(outside, "linked.rb"), "OUTSIDE\n")
+      in_smelly_project do
+        git_repo
+        File.symlink(File.join(outside, "linked.rb"), "app/innocent.rb")
+        status, out, err = judgelint("--base", "main")
+
+        assert_equal 1, status, err
+        assert_match(/skipped/, out)
+        assert_empty @server.requests
+      end
+    end
+  end
+
+  def test_a_directory_with_a_file_too_large_to_send_is_skipped
+    in_project do
+      write(".judgelint/rules/cohesive.md", "---\nquestion: Do these files fail to hang together?\nscope: directory\n" \
+                                            "paths: [\"app/features/*\"]\n---\nOne capability per feature.\n")
+      write("app/features/a/index.rb", "fine\n")
+      git_repo
+      write("app/features/a/huge.rb", "x" * (5 << 20))
+      status, out, err = judgelint("--base", "main")
+
+      assert_equal 1, status, err
+      assert_match(/skipped/, out)
+      assert_empty @server.requests
+    end
   end
 
   def test_a_change_too_large_to_judge_fails_the_check

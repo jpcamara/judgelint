@@ -15,7 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock, mpsc};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::{WalkBuilder, WalkState};
 
@@ -237,6 +237,9 @@ pub enum Contents {
     Text(String),
     TooLarge,
     Binary,
+    /// A file judgelint won't send, and why: outside the project, ignored
+    /// by git, or not a regular file.
+    Excluded(String),
 }
 
 /// The working directory, resolved, which every file sent must be inside.
@@ -267,15 +270,15 @@ fn open(path: &Path, follow: bool) -> std::io::Result<File> {
     OpenOptions::new().read(true).custom_flags(flags).open(path)
 }
 
-/// Opens a file to send, with its path relative to the working directory.
-/// One that leads outside it, through a link or otherwise, is an error. A
+/// Opens a file to send, with its path relative to the working directory,
+/// or None for one that leads outside it, through a link or otherwise. A
 /// plain relative path costs nothing to check; any other is resolved.
-fn open_inside(path: &str) -> Result<(File, String)> {
+fn open_inside(path: &str) -> Result<Option<(File, String)>> {
     let relative = Path::new(path.strip_prefix("./").unwrap_or(path));
     let plain = relative.components().all(|c| matches!(c, Component::Normal(_)));
     if plain && plain_directories(relative.parent().unwrap_or(Path::new(""))) {
         match open(relative, false) {
-            Ok(file) => return Ok((file, relative.to_string_lossy().into_owned())),
+            Ok(file) => return Ok(Some((file, relative.to_string_lossy().into_owned()))),
             // The file is a link.
             Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {}
             Err(e) => return Err(e).with_context(|| format!("Couldn't read {path}")),
@@ -285,25 +288,27 @@ fn open_inside(path: &str) -> Result<(File, String)> {
     // Unit tests work in temporary directories outside the project; the
     // end-to-end tests cover where a file may be.
     let root = if cfg!(test) { Path::new("/") } else { root() };
-    let inside = real.strip_prefix(root).map_err(|_| anyhow!("{path} is outside the project"))?;
+    let Ok(inside) = real.strip_prefix(root) else { return Ok(None) };
     let file = open(&real, true).with_context(|| format!("Couldn't read {path}"))?;
-    Ok((file, inside.to_string_lossy().into_owned()))
+    Ok(Some((file, inside.to_string_lossy().into_owned())))
 }
 
 /// Reads a file to send to a model. Every file a model sees comes through
 /// here: a regular file inside the working directory, not reached through a
 /// link that leaves it, and, in a git repository, one git tracks or would
-/// add. Anything else is an error that says why.
+/// add. Anything else is Excluded, with why; a file that can't be read is
+/// an error.
 pub fn read_to_send(path: &str) -> Result<Contents> {
-    let (file, inside) = open_inside(path)?;
+    let excluded = |why: &str| Ok(Contents::Excluded(format!("{path} {why}")));
+    let Some((file, inside)) = open_inside(path)? else { return excluded("is outside the project") };
     if let Some(listed) = project_files().filter(|_| !cfg!(test))
         && listed.binary_search_by(|p| p.as_str().cmp(&inside)).is_err()
     {
-        bail!("{path} is ignored by git");
+        return excluded("is ignored by git");
     }
     let metadata = file.metadata()?;
     if !metadata.is_file() {
-        bail!("{path} isn't a regular file");
+        return excluded("isn't a regular file");
     }
     if metadata.len() > MAX_FILE_BYTES {
         return Ok(Contents::TooLarge);
@@ -325,6 +330,7 @@ pub fn read_text(path: &str) -> Result<String> {
         Contents::Text(text) => Ok(text),
         Contents::TooLarge => bail!("{path} is over {} MB", MAX_FILE_BYTES >> 20),
         Contents::Binary => bail!("{path} is binary"),
+        Contents::Excluded(why) => bail!("{why}"),
     }
 }
 
