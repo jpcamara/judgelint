@@ -44,6 +44,27 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_link_within_the_project_is_followed
+    in_smelly_project do
+      File.symlink("bad.rb", "app/also_bad.rb")
+      status, out, err = judgelint
+
+      assert_equal 1, status, err
+      assert_match(/^3 files, 2 violations$/, out)
+    end
+  end
+
+  def test_a_pipe_named_as_context_is_an_error_not_a_wait
+    in_smelly_project do
+      File.mkfifo("app/pipe")
+      write_rule("smell", extra: "context: [\"app/pipe\"]")
+      status, _out, err = judgelint("app/bad.rb")
+
+      assert_equal 2, status
+      assert_match(%r{app/pipe isn't a regular file}, err)
+    end
+  end
+
   def test_a_directory_rule_sends_neither_ignored_nor_binary_files
     in_project do
       write(".judgelint/rules/cohesive.md", "---\nquestion: Do these files fail to hang together?\nscope: directory\n" \
