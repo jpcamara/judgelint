@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 
 use crate::git;
@@ -58,10 +58,10 @@ pub fn since(reference: &str, committed: bool) -> Result<Changes> {
         .concat(),
     )?;
     let mut changed = parse_diff(&diff);
-    let names = git_text(&[&["diff", "--name-status", "-z"][..], &options, compared].concat())?;
+    let names = git_paths(&[&["diff", "--name-status", "-z"][..], &options, compared].concat())?;
     add_names(&mut changed, &names);
     if !committed {
-        let new = git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+        let new = git_paths(&["ls-files", "-z", "--others", "--exclude-standard"])?;
         for path in new.split('\0').filter(|p| !p.is_empty()) {
             changed.insert(path.to_string(), Changed::All);
         }
@@ -258,13 +258,28 @@ fn git_text(args: &[&str]) -> Result<String> {
     git::run(Path::new("."), args).map(|out| String::from_utf8_lossy(&out).into_owned())
 }
 
+fn git_paths(args: &[&str]) -> Result<String> {
+    utf8_paths(git::run(Path::new("."), args)?)
+}
+
+/// git's NUL-separated list of paths, which must all be UTF-8: decoded with
+/// a stand-in for the bytes that aren't, a path could name another file, and
+/// the one that changed would go unread.
+fn utf8_paths(out: Vec<u8>) -> Result<String> {
+    String::from_utf8(out).map_err(|e| {
+        let out = e.into_bytes();
+        let path = out.split(|&b| b == 0).find(|p| std::str::from_utf8(p).is_err()).unwrap_or_default();
+        anyhow!("{} changed, and judgelint can only read paths in UTF-8", path.escape_ascii())
+    })
+}
+
 /// The base branch of the current branch's pull request, from the gh CLI.
 fn gh_base_branch() -> Result<String> {
     let output = Command::new("gh")
         .args(["pr", "view", "--json", "baseRefName", "-q", ".baseRefName"])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| anyhow::anyhow!("Couldn't run gh: {e}"))?;
+        .map_err(|e| anyhow!("Couldn't run gh: {e}"))?;
     if !output.status.success() {
         bail!("gh pr view failed: {}", git::first_line(&output.stderr));
     }
@@ -348,6 +363,13 @@ mod tests {
     fn quoted_paths() {
         let diff = "+++ \"b/tab\\there \\\"q\\\" \\303\\251.rb\"\n@@ -0,0 +1 @@\n+x\n";
         assert_eq!(parse_diff(diff).keys().collect::<Vec<_>>(), ["tab\there \"q\" \u{e9}.rb"]);
+    }
+
+    #[test]
+    fn a_changed_path_must_be_utf8() {
+        assert_eq!(utf8_paths(b"M\0app/\xc3\xa9.rb\0".to_vec()).unwrap(), "M\0app/\u{e9}.rb\0");
+        let error = utf8_paths(b"M\0app/\xef\xbf\xbd.rb\0M\0app/\xff.rb\0".to_vec()).unwrap_err();
+        assert_eq!(error.to_string(), "app/\\xff.rb changed, and judgelint can only read paths in UTF-8");
     }
 
     #[test]

@@ -136,6 +136,7 @@ class SecurityTest < Minitest::Test
       assert_equal ["Bearer secret"], @server.requests.map { |r| r[:authorization] }
       refute_includes @server.requests.first[:payload].to_s, "Context", "nor its rules"
       assert_equal "jlcache1", File.read(".judgelint/cache.bin"), "and the checkout's cache is left alone"
+      assert_match(%r{this pull request changes \.judgelint/cache\.bin}, err, "and says its cache changed")
     end
   ensure
     attacker&.stop
@@ -308,6 +309,89 @@ class SecurityTest < Minitest::Test
 
       assert_equal 1, status
       assert_equal 1, @server.requests.size
+    end
+  end
+
+  def write_directory_rule
+    write(".judgelint/rules/no-smell.md", <<~MARKDOWN)
+      ---
+      question: Does any file in this directory smell?
+      scope: directory
+      paths: ["app/*"]
+      ---
+      No smells.
+    MARKDOWN
+  end
+
+  def test_a_link_to_a_directory_that_a_change_adds_is_judged
+    in_project do
+      write_directory_rule
+      write("app/a/index.rb", "fine\n")
+      write("vendor/ok.rb", "fine\n")
+      git_repo
+      write("vendor/bad.rb", "SMELL\n")
+      File.symlink("../vendor", "app/payments")
+      status, out, err = judgelint("--base", "main")
+
+      assert_equal 1, status, err
+      assert_match(/^app\/payments$/, out)
+    end
+  end
+
+  def test_a_directory_named_like_a_pattern_sends_its_own_files
+    in_project do
+      write_directory_rule
+      write("app/pay[1]/bad.rb", "SMELL\n")
+      write("app/pay1/ok.rb", "fine\n")
+      status, out, err = judgelint
+
+      assert_equal 1, status, err
+      assert_match(/^app\/pay\[1\]$/, out)
+      refute_match(/^app\/pay1$/, out)
+    end
+  end
+
+  def test_ci_commands_in_file_names_are_escaped_in_every_format
+    in_smelly_project do
+      write("app/##vso[task.complete]##[error]x.rb", "SMELL\n")
+      _status, text, = judgelint
+      _status, json, = judgelint("-f", "json")
+      _status, sarif, = judgelint("-f", "sarif")
+
+      [text, json, sarif].each { |out| refute_includes out, "##" }
+      assert_includes text, "app/#\\#vso[task.complete]#\\#[error]x.rb"
+      assert_includes JSON.parse(json)["results"].map { |r| r["path"] }, "app/##vso[task.complete]##[error]x.rb"
+      uris = JSON.parse(sarif)["runs"][0]["results"].map { |r| r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] }
+      assert_includes uris, "app/##vso[task.complete]##[error]x.rb"
+    end
+  end
+
+  def test_a_changed_path_that_isnt_utf8_fails_a_change_check
+    skip "file names are UTF-8 on macOS" unless RUBY_PLATFORM.include?("linux")
+    in_smelly_project do
+      git_repo
+      # Decoded with a stand-in for the bad byte, the changed file would be
+      # the empty one beside it.
+      write("app/\uFFFD.rb", "")
+      write("app/\xFF.rb".b, "SMELL\n")
+      status, _out, err = judgelint("--base", "main")
+
+      assert_equal 2, status, err
+      assert_match(/can only read paths in UTF-8/, err)
+      assert_empty @server.requests
+    end
+  end
+
+  def test_init_leaves_a_link_alone
+    Dir.mktmpdir("judgelint-outside") do |outside|
+      in_project do
+        File.symlink(File.join(outside, "created.md"), "CONVENTIONS.md")
+        out, _err, status = Open3.capture3(BINARY, "init")
+
+        assert_equal 0, status.exitstatus
+        assert_match(/exists  CONVENTIONS\.md/, out)
+        refute File.exist?(File.join(outside, "created.md"))
+      end
     end
   end
 
@@ -505,7 +589,7 @@ class SecurityTest < Minitest::Test
       status, _out, err = judgelint("app/bad.rb")
 
       assert_equal 2, status
-      assert_includes err, 'bad\n::error::forged\u{1b}[31m ##\[error]x'
+      assert_includes err, 'bad\n::error::forged\u{1b}[31m #\#[error]x'
       refute_match(/^::error/, err)
     end
   end

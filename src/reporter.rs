@@ -143,6 +143,43 @@ fn group_by<'v, K: PartialEq>(items: &[&'v Verdict], key: impl Fn(&Verdict) -> K
     groups
 }
 
+/// A writer for JSON that writes each `#` after another as `\u0023`. CI
+/// systems read a command from `##` anywhere in a line, like `##[error]` or
+/// `##vso[`, and a file name can hold one; the escape reads back the same,
+/// and `#` only appears in JSON inside a string.
+struct Commands<W> {
+    out: W,
+    hash: bool,
+}
+
+impl<W: Write> Commands<W> {
+    fn new(out: W) -> Self {
+        Commands { out, hash: false }
+    }
+}
+
+impl<W: Write> Write for Commands<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut start = 0;
+        for (i, &b) in buf.iter().enumerate() {
+            if b == b'#' && self.hash {
+                self.out.write_all(&buf[start..i])?;
+                self.out.write_all(b"\\u0023")?;
+                start = i + 1;
+                self.hash = false;
+            } else {
+                self.hash = b == b'#';
+            }
+        }
+        self.out.write_all(&buf[start..])?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+}
+
 impl<'a> Reporter<'a> {
     pub fn new(out: &'a mut dyn Write, format: Format, paint: Paint, rules: &'a [Rule]) -> Self {
         Reporter { out, format, paint, rules }
@@ -165,13 +202,13 @@ impl<'a> Reporter<'a> {
                     usage: usage.summary(),
                     results: Findings(verdicts, self.rules),
                 };
-                serde_json::to_writer_pretty(&mut *self.out, &report)?;
+                serde_json::to_writer_pretty(Commands::new(&mut *self.out), &report)?;
                 writeln!(self.out)
             }
             Format::Github => verdicts.iter().try_for_each(|v| self.annotate(v)),
             Format::Sarif => {
                 let sarif = self.sarif(verdicts);
-                serde_json::to_writer_pretty(&mut *self.out, &sarif)?;
+                serde_json::to_writer_pretty(Commands::new(&mut *self.out), &sarif)?;
                 writeln!(self.out)
             }
             Format::Text => self.text(verdicts, file_count),
@@ -188,7 +225,7 @@ impl<'a> Reporter<'a> {
                 usage: usage.summary(),
                 examples: Findings(examples, self.rules),
             };
-            serde_json::to_writer_pretty(&mut *self.out, &report)?;
+            serde_json::to_writer_pretty(Commands::new(&mut *self.out), &report)?;
             return writeln!(self.out);
         }
         for (rule, group) in group_by(examples, |v| v.rule) {
@@ -382,4 +419,25 @@ fn probability(verdict: &Verdict) -> String {
 fn escape(text: &str, property: bool) -> String {
     let escaped = text.replace('%', "%25").replace('\r', "%0D").replace('\n', "%0A");
     if property { escaped.replace(':', "%3A").replace(',', "%2C") } else { escaped }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_escapes_ci_commands_and_reads_back_the_same() {
+        let paths = ["##[error]forged.rb", "##vso[task.uploadfile]/etc/passwd", "a###b", "issue #1"];
+        let mut out = Vec::new();
+        serde_json::to_writer_pretty(Commands::new(&mut out), &paths).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("##"), "{text}");
+        assert_eq!(serde_json::from_str::<Vec<String>>(&text).unwrap(), paths);
+
+        let mut out = Vec::new();
+        let mut split = Commands::new(&mut out);
+        split.write_all(b"\"a#").unwrap();
+        split.write_all(b"#\"").unwrap();
+        assert_eq!(out, b"\"a#\\u0023\"", "a pair split across writes");
+    }
 }

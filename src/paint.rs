@@ -51,12 +51,13 @@ impl Paint {
 
 /// +text+ with control characters escaped, for text from a file name, a
 /// repository or an endpoint: a newline or an escape sequence in it could
-/// otherwise forge a line of output. So could a CI workflow command, which
-/// GitHub Actions reads from a line that starts with `::` or holds `##[`;
-/// those get a backslash.
+/// otherwise forge a line of output. So could a CI command: GitHub Actions
+/// reads one from a line that starts with `::` or holds `##[`, Azure
+/// Pipelines from `##vso[` and TeamCity from `##teamcity[`. A leading `::`
+/// gets a backslash, and so does each `#` after another.
 pub fn clean(text: &str) -> Cow<'_, str> {
     let control = |c: char| c.is_control() && c != '\t';
-    let command = |text: &str| text.trim_start().starts_with("::") || text.contains("##[");
+    let command = |text: &str| text.trim_start().starts_with("::") || text.contains("##");
     if !text.chars().any(control) && !command(text) {
         return Cow::Borrowed(text);
     }
@@ -65,10 +66,12 @@ pub fn clean(text: &str) -> Cow<'_, str> {
         if control(c) {
             cleaned.extend(c.escape_default());
         } else {
+            if c == '#' && cleaned.ends_with('#') {
+                cleaned.push('\\');
+            }
             cleaned.push(c);
         }
     }
-    let mut cleaned = cleaned.replace("##[", "##\\[");
     if cleaned.trim_start().starts_with("::") {
         cleaned.insert(cleaned.len() - cleaned.trim_start().len(), '\\');
     }
@@ -85,7 +88,10 @@ mod tests {
         assert_eq!(clean("a\n::error::forged\x1b[31m"), "a\\n::error::forged\\u{1b}[31m");
         assert_eq!(clean("::error::forged.rb"), "\\::error::forged.rb");
         assert_eq!(clean(" ::warning::x"), " \\::warning::x");
-        assert_eq!(clean("bad ##[error]forged"), "bad ##\\[error]forged");
+        assert_eq!(clean("bad ##[error]forged"), "bad #\\#[error]forged");
+        assert_eq!(clean("##vso[task.uploadfile]/etc/passwd"), "#\\#vso[task.uploadfile]/etc/passwd");
+        assert_eq!(clean("a ###teamcity["), "a #\\#\\#teamcity[");
+        assert_eq!(clean("issue #12"), "issue #12");
         assert_eq!(clean("lib/a::b.rb"), "lib/a::b.rb");
     }
 }
