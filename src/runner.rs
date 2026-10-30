@@ -222,7 +222,8 @@ impl<'a> Runner<'a> {
         Ok(jobs)
     }
 
-    /// The directories directory rules govern; with a change, those it touched.
+    /// The directories directory rules govern; with a change, those it
+    /// touched, by changing, adding or deleting a file in them.
     pub fn plan_directories(&self, directories: &[String], changes: Option<&Changes>) -> Result<Vec<Job>> {
         let kept = |dir: &&String| {
             let prefix = format!("{dir}/");
@@ -238,14 +239,11 @@ impl<'a> Runner<'a> {
                     (0..self.rules.len()).filter(|&i| self.rules[i].is_directory() && self.rules[i].applies_to(dir));
                 let mut jobs = Vec::new();
                 for group in self.by_context(applicable) {
-                    let source = Source::directory(self.project, dir, None, self.context_for(group[0])?)?;
+                    let context = self.context_for(group[0])?;
+                    let source = Source::directory(self.project, dir, None, context, changes.is_some())?;
                     let read = source.read_all(self.project)?;
-                    let mut source = source.scan(&read);
+                    let source = source.scan(&read);
                     let unjudgeable = source.unjudgeable;
-                    // Planned as one line at least, so every rule has a verdict.
-                    if unjudgeable {
-                        source.line_count = source.line_count.max(1);
-                    }
                     let mut job = self.plan(source, &read, &group, Some(&Changed::All), None)?;
                     job.skipped |= unjudgeable;
                     jobs.push(job);
@@ -316,7 +314,7 @@ impl<'a> Runner<'a> {
             .map(|w| {
                 let context = self.context_for(w.rule)?;
                 let source = if self.rules[w.rule].is_directory() {
-                    Source::directory(self.project, &w.path, Some(&w.shown), context)?
+                    Source::directory(self.project, &w.path, Some(&w.shown), context, false)?
                 } else {
                     Source::file(&w.path, Some(&w.shown), context, w.text.clone())
                 };
@@ -409,9 +407,15 @@ impl<'a> Runner<'a> {
             asked.push(Arc::new(Question::new(rule, first, last, Kind::Verdict, None, changed)));
             // Where a bullet is broken is asked over the range's lines or the
             // directory's files, but not for a rule written as a question, or
-            // past what a choice can hold.
-            let options = if rule.is_directory() { source.file_list().len() } else { (last - first + 1) as usize };
-            if rule.convention.is_some() && options <= MAX_OPTIONS {
+            // with nothing or more than a choice can hold to pick from.
+            let options = if rule.is_directory() {
+                source.file_list().len()
+            } else if source.line_count == 0 {
+                0
+            } else {
+                (last - first + 1) as usize
+            };
+            if rule.convention.is_some() && (1..=MAX_OPTIONS).contains(&options) {
                 let places =
                     rule.is_directory().then(|| source.members().into_iter().map(|(_, shown)| shown).collect());
                 asked.push(Arc::new(Question::new(rule, first, last, Kind::Where, places, None)));
@@ -610,11 +614,10 @@ impl<'a> Runner<'a> {
 
     /// A window's probability of a violation is the average of its verdict
     /// over the models, and its place is the line or file the models' "where"
-    /// answers agree on. When a change touched only some of its lines, the
-    /// probability counts only the share of "where" answers on those lines. A
-    /// rule's verdict is its worst window. A window whose judgehint excuses
-    /// it, by the same average and threshold, is reported as excused instead,
-    /// unless another window breaks the rule.
+    /// answers agree on. A rule's verdict is its worst window, and a window no
+    /// model answered leaves it refused unless another breaks the rule. A
+    /// window whose judgehint excuses it, by the same average and threshold,
+    /// is reported as excused instead, unless another window breaks the rule.
     fn verdict_for(&self, rule: usize, job: &Job, range: std::ops::Range<usize>) -> Verdict {
         let path = job.path.clone();
         if job.skipped {
@@ -624,6 +627,7 @@ impl<'a> Runner<'a> {
         let threshold = self.rules[rule].threshold;
         let mut open = Vec::new();
         let mut excused = Vec::new();
+        let mut refused: Option<(u32, u32)> = None;
         // The rule's questions come a range at a time, the verdict first.
         let mut i = range.start;
         while i < range.end {
@@ -632,7 +636,6 @@ impl<'a> Runner<'a> {
             let mut excuses: Vec<f64> = Vec::new();
             let mut spread: Vec<f64> = Vec::new();
             let mut place_question: Option<&Question> = None;
-            let start = i;
             while i < range.end && (flat[i].first, flat[i].last) == (first, last) {
                 let question = &*flat[i];
                 for answer in job.answers.iter().filter_map(|answers| answers.get(i)?.as_ref()) {
@@ -651,13 +654,11 @@ impl<'a> Runner<'a> {
                 i += 1;
             }
             if values.is_empty() {
+                refused.get_or_insert((first, last));
                 continue;
             }
-            let mut probability = values.iter().sum::<f64>() / values.len() as f64;
+            let probability = values.iter().sum::<f64>() / values.len() as f64;
             let places = place_question.map_or(&[][..], |q| &q.options[..]);
-            if let Some(changed) = &flat[start].lines {
-                probability *= changed_share(&spread, places, changed);
-            }
             let place = agreed(&spread).map(|best| places[best].0.clone());
             let window = Window { first, last, probability, place };
             if !excuses.is_empty() && excuses.iter().sum::<f64>() / excuses.len() as f64 >= threshold {
@@ -667,6 +668,13 @@ impl<'a> Runner<'a> {
             }
         }
         let found = self.worst(rule, &path, &open, job);
+        if let Some(found) = found.as_ref().filter(|f| f.status == Status::Violation) {
+            return found.clone();
+        }
+        if let Some(lines) = refused {
+            let lines = (!self.rules[rule].is_directory()).then_some(lines);
+            return Verdict { lines, ..Verdict::new(rule, path, Status::Refused) };
+        }
         if let Some(found) = found.as_ref().filter(|f| f.status != Status::Pass) {
             return found.clone();
         }
@@ -732,23 +740,8 @@ fn touched(lines: Option<&Changed>, first: u32, last: u32) -> bool {
     match lines {
         Some(Changed::All) => true,
         Some(Changed::Lines(lines)) => lines.iter().any(|&l| l >= first && l <= last),
-        None => false,
+        Some(Changed::Deleted) | None => false,
     }
-}
-
-/// The share of the summed "where" probabilities on +lines+, or all of it
-/// when nothing answered where.
-fn changed_share(spread: &[f64], places: &[(String, Option<String>)], lines: &[u32]) -> f64 {
-    let total: f64 = spread.iter().sum();
-    let on_lines: f64 = spread
-        .iter()
-        .zip(places)
-        .filter(|(_, (place, _))| {
-            place.strip_prefix('L').and_then(|n| n.parse().ok()).is_some_and(|n| lines.contains(&n))
-        })
-        .map(|(p, _)| p)
-        .sum();
-    if total > 0.0 { on_lines / total } else { 1.0 }
 }
 
 /// The place with at least PLACE_AT of the summed "where" probabilities.

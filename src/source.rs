@@ -13,7 +13,7 @@ use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::project::{Contents, Project};
+use crate::project::{self, Contents, Project};
 
 static HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:#|//|--|/\*|<!--|;)\s*judgehint:").unwrap());
 
@@ -49,18 +49,21 @@ impl Source {
 
     /// A directory and its files, except the ignored and binary ones. One
     /// judgelint won't send, too large or leading outside the project, leaves
-    /// the directory unjudgeable.
+    /// the directory unjudgeable, and so does a binary one when a change is
+    /// being checked, unless it's in a format that's never code.
     pub fn directory(
         project: &Project,
         dir: &str,
         shown_as: Option<&str>,
         context: Arc<Vec<String>>,
+        changed: bool,
     ) -> Result<Source> {
         let mut unjudgeable = false;
         let mut files = Vec::new();
         for file in project.expand(&[format!("{dir}/**/*")])? {
             match project.read_to_send(&file)? {
                 Contents::Text(_) => files.push(file),
+                Contents::Binary if changed && !project::binary_format(&file) => unjudgeable = true,
                 Contents::Binary | Contents::Ignored => {}
                 Contents::TooLarge | Contents::Excluded(_) => unjudgeable = true,
             }
@@ -203,7 +206,7 @@ mod tests {
         dir.write("a/helper.rb", "SMELL\n");
         dir.write("types.rb", "Types = 1\n");
         let project = dir.project();
-        let source = Source::directory(&project, "a", None, Arc::new(vec!["types.rb".into()])).unwrap();
+        let source = Source::directory(&project, "a", None, Arc::new(vec!["types.rb".into()]), false).unwrap();
         let read = source.read_all(&project).unwrap();
         let expected = "Directory: a\n\nPath: a/helper.rb\n\n1: SMELL\n\nPath: a/index.rb\n\n1: one\n\n\
                         Context, for reference only (not under review):\n\nPath: types.rb\n\nTypes = 1\n";

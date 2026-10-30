@@ -17,7 +17,7 @@ use crate::client::Client;
 use crate::config::{self, Config};
 use crate::glob::Patterns;
 use crate::paint::{self, Paint};
-use crate::project::{Contents, Holds, Project};
+use crate::project::{self, Contents, Holds, Project};
 use crate::providers;
 use crate::reporter::{Format, Reporter};
 use crate::rule::Rule;
@@ -153,19 +153,26 @@ impl App {
         }
         let runner = Runner::new(&project, &config, &rules);
         // A file no rule governs, that's ignored, or that's binary is left
-        // out, and so is one judgelint won't send, with a warning. Checking a
-        // change, that one is skipped instead, which fails the run.
+        // out, and so is one judgelint won't send, with a warning. A file too
+        // large to send is skipped. Checking a change, any changed file that
+        // can't be sent is skipped, which fails the run, except one in a
+        // format that's never code, like an image.
         let prepare = |path: &String| -> Result<Option<Vec<Job>>> {
             if config.ignore.is_match(path) || !rules.iter().any(|r| !r.is_directory() && r.applies_to(path)) {
                 return Ok(None);
             }
             let text = match project.read_to_send(path)? {
                 Contents::Text(text) => text,
-                Contents::Binary | Contents::Ignored => return Ok(None),
                 Contents::TooLarge => return runner.skip_file(path).map(Some),
-                Contents::Excluded(why) => {
+                Contents::Binary if changes.is_none() || project::binary_format(path) => return Ok(None),
+                Contents::Ignored if changes.is_none() => return Ok(None),
+                Contents::Excluded(why) if changes.is_none() => {
                     eprintln!("judgelint: left out {why}");
-                    return if changes.is_some() { runner.skip_file(path).map(Some) } else { Ok(None) };
+                    return Ok(None);
+                }
+                unsendable => {
+                    eprintln!("judgelint: skipped {}", unsendable.why(path));
+                    return runner.skip_file(path).map(Some);
                 }
             };
             let lines = changes.as_ref().map_or(Some(&Changed::All), |c| c.get(path.as_str()));
@@ -393,7 +400,11 @@ fn check_paths(project: &Project, rules: &[Rule], paths: &[String], changes: Opt
         });
     }
     if let Some(changes) = changes {
-        let mut changed: Vec<String> = changes.keys().filter(|p| project.is_file(p)).cloned().collect();
+        let mut changed: Vec<String> = changes
+            .iter()
+            .filter(|(path, change)| **change != Changed::Deleted && project.is_file(path))
+            .map(|(path, _)| path.clone())
+            .collect();
         changed.sort_unstable();
         return Ok(changed);
     }
