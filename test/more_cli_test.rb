@@ -125,6 +125,7 @@ class MoreCLITest < Minitest::Test
 
   def test_pr_reads_the_base_branch_from_each_ci
     in_smelly_project do |dir|
+      write_config
       git_repo
       git("branch", "develop")
       git("branch", "trunk")

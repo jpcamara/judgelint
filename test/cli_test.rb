@@ -210,6 +210,7 @@ class CLITest < Minitest::Test
 
   def test_pr_finds_the_base_branch_and_fetches_it
     in_smelly_project do |dir|
+      env(@server.base, {}, {})
       git_repo
       git("init", "--bare", "-q", "#{dir}/origin.git")
       git("remote", "add", "origin", "#{dir}/origin.git")

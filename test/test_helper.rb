@@ -166,11 +166,16 @@ module ProjectHelpers
   # settings. Every run passes --no-cache unless +cache+. Returns [status,
   # stdout, stderr].
   def judgelint(*args, server: @server, model: {}, config: {}, env: {}, cache: false)
-    entry = { "provider" => "typesafe", "api_base" => server.base, "api_key_env" => "JUDGELINT_TEST_KEY" }.merge(model)
-    write(".judgelint.yml", JSON.generate({ "models" => [entry] }.merge(config)))
+    write_config(server: server, model: model, config: config)
     out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret" }.merge(env), BINARY, *args,
                                       *("--no-cache" unless cache))
     [status.exitstatus, out, err]
+  end
+
+  # The .judgelint.yml #judgelint writes.
+  def write_config(server: @server, model: {}, config: {})
+    entry = { "provider" => "typesafe", "api_base" => server.base, "api_key_env" => "JUDGELINT_TEST_KEY" }.merge(model)
+    write(".judgelint.yml", JSON.generate({ "models" => [entry] }.merge(config)))
   end
 
   # Commits the project on main, as a repository judgelint can diff against.

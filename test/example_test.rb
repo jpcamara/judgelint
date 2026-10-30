@@ -4,8 +4,8 @@ require "test_helper"
 require "open3"
 require "stringio"
 
-# Replays examples/scoop-society from its committed cache, with the network
-# pointed nowhere, and checks the verdicts against expected.json: every listed
+# Replays examples/scoop-society from its committed cache, with no API key,
+# and checks the verdicts against expected.json: every listed
 # violation but the known misses is found, and nothing else is a violation
 # except the arguable ones. A changed rule or file is a cache miss, which
 # fails here until `rake example` re-records it.
@@ -20,9 +20,8 @@ class ExampleTest < Minitest::Test
     arguable = pairs.call(spec["arguable"])
 
     Dir.mktmpdir("judgelint-example") do |dir|
-      config = File.join(dir, "offline.yml")
-      File.write(config, "models: [{provider: typesafe, api_base: \"http://127.0.0.1:1\"}]\n" \
-                         "ignore: [\"src/services/_*\", \"src/generated/**\"]\n")
+      config = File.join(dir, "judgelint.yml")
+      File.write(config, "ignore: [\"src/services/_*\", \"src/generated/**\"]\n")
       runners.each do |name, command|
         out, err, status = Open3.capture3({ "TYPESAFE_API_KEY" => nil }, *command, "--config", config,
                                           "--format", "json", chdir: EXAMPLE)

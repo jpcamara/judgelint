@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use rayon::prelude::*;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -36,6 +36,8 @@ use crate::verdict::{Status, Verdict};
 const PLACE_AT: f64 = 0.5;
 /// A choice takes at most this many options.
 const MAX_OPTIONS: usize = 255;
+/// A file's requests in flight at once.
+const REQUESTS_AT_ONCE: usize = 16;
 
 /// One rule's questions about a file, shared by the files that match.
 type Questions = Arc<Vec<Arc<Question>>>;
@@ -163,7 +165,12 @@ impl<'a> Runner<'a> {
         if let Some(found) = self.context_files.lock().unwrap_or_else(|e| e.into_inner()).get(&group) {
             return Ok(found.clone());
         }
-        let files = Arc::new(glob::expand(&self.rules[group].context)?);
+        let files = glob::expand(&self.rules[group].context)?;
+        // Context is sent like the code, so it follows the same rules.
+        for file in &files {
+            glob::read_text(file).with_context(|| format!("Context of {}", self.rules[group].id))?;
+        }
+        let files = Arc::new(files);
         self.context_files.lock().unwrap_or_else(|e| e.into_inner()).insert(group, files.clone());
         Ok(files)
     }
@@ -194,6 +201,16 @@ impl<'a> Runner<'a> {
         for group in self.by_context(applicable) {
             let source = Source::file(path, None, self.context_for(group[0])?, None).scan(&read);
             jobs.push(self.plan(source, &read, &group, lines, None)?);
+        }
+        Ok(jobs)
+    }
+
+    /// The jobs of a file too large to read, which are reported as skipped:
+    /// planned as one line so every rule that governs it has a verdict.
+    pub fn skip_file(&self, path: &str) -> Result<Vec<Job>> {
+        let mut jobs = self.prepare_file(path, "\n".into(), Some(&Changed::All))?;
+        for job in &mut jobs {
+            job.skipped = true;
         }
         Ok(jobs)
     }
@@ -395,10 +412,7 @@ impl<'a> Runner<'a> {
     pub fn pack_all(&self, jobs: &mut [Job], clients: &[Client], cache: &Cache) -> Result<()> {
         // Each model's answers are cached on their own, so adding a model asks
         // only the new one.
-        let labels: Vec<String> = clients
-            .iter()
-            .map(|c| format!("{}/{}", c.endpoint.provider, c.endpoint.model.as_deref().unwrap_or("")))
-            .collect();
+        let labels: Vec<String> = clients.iter().map(|c| c.endpoint.cache_label.clone()).collect();
         jobs.par_iter_mut().try_for_each(|job| {
             self.pack(job, clients, &labels, cache)?;
             if job.requests.is_empty() {
@@ -413,6 +427,9 @@ impl<'a> Runner<'a> {
     /// few requests as fit its limits. A file whose state and widest question
     /// are over a model's limit is skipped: it's reported, never sent.
     fn pack(&self, job: &mut Job, clients: &[Client], labels: &[String], cache: &Cache) -> Result<()> {
+        if job.skipped {
+            return Ok(());
+        }
         let questions = job.questions.clone();
         let state = hex(&job.state_digest);
         for (model, client) in clients.iter().enumerate() {
@@ -533,27 +550,28 @@ impl<'a> Runner<'a> {
             let asked: Vec<&Question> = request.questions.iter().map(|&i| &*questions.flat[i as usize]).collect();
             client.judge(state, &asked)
         };
-        let results: Vec<Result<Vec<Option<Answer>>>> = match job.requests.as_slice() {
-            [request] => vec![send(request)],
-            requests => std::thread::scope(|scope| {
-                let handles: Vec<_> = requests.iter().map(|request| scope.spawn(|| send(request))).collect();
-                handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow!("a request failed")))).collect()
-            }),
-        };
+        let mut results: Vec<Result<Vec<Option<Answer>>>> = Vec::with_capacity(job.requests.len());
+        for group in job.requests.chunks(REQUESTS_AT_ONCE) {
+            match group {
+                [request] => results.push(send(request)),
+                requests => std::thread::scope(|scope| {
+                    let handles: Vec<_> = requests.iter().map(|request| scope.spawn(|| send(request))).collect();
+                    let joined =
+                        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow!("a request failed"))));
+                    results.extend(joined);
+                }),
+            }
+        }
         let state = hex(&job.state_digest);
         job.answers.resize_with(clients.len(), Vec::new);
         for (request, answers) in job.requests.iter().zip(results) {
             let model = request.model;
-            let label = format!(
-                "{}/{}",
-                clients[model].endpoint.provider,
-                clients[model].endpoint.model.as_deref().unwrap_or("")
-            );
+            let label = &clients[model].endpoint.cache_label;
             let kept = &mut job.answers[model];
             kept.resize_with(questions.flat.len(), || None);
             for (&i, answer) in request.questions.iter().zip(answers?) {
                 if let Some(answer) = &answer {
-                    cache.put(&cache::key(&questions.flat[i as usize].digest, &state, &label), answer.values())?;
+                    cache.put(&cache::key(&questions.flat[i as usize].digest, &state, label), answer.values())?;
                 }
                 kept[i as usize] = answer;
             }

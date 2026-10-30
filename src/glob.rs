@@ -7,12 +7,13 @@
 //! doesn't follow links into directories under `**`, though a literal
 //! directory in a pattern can be a link, and a link to a file is the file.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 use ignore::{WalkBuilder, WalkState};
 
@@ -221,6 +222,69 @@ pub fn expand_arguments(arguments: &[String]) -> Result<Vec<String>> {
     let mut seen = std::collections::HashSet::new();
     out.retain(|p| seen.insert(p.clone()));
     Ok(out)
+}
+
+/// The most of one file judgelint reads. A larger file is far past what a
+/// model takes, and is reported as skipped.
+pub const MAX_FILE_BYTES: u64 = 4 << 20;
+/// A file with a NUL byte this near its start is binary.
+const BINARY_PREFIX: usize = 8000;
+
+/// A file's contents, as far as sending it goes.
+pub enum Contents {
+    Text(String),
+    TooLarge,
+    Binary,
+}
+
+/// The working directory, resolved, which every file sent must be inside.
+fn root() -> &'static Path {
+    static ROOT: OnceLock<PathBuf> = OnceLock::new();
+    ROOT.get_or_init(|| fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from(".")))
+}
+
+/// Reads a file to send to a model. Every file a model sees comes through
+/// here: a regular file inside the working directory, not reached through a
+/// link that leaves it, and, in a git repository, one git tracks or would
+/// add. Anything else is an error that says why.
+pub fn read_to_send(path: &str) -> Result<Contents> {
+    let real = fs::canonicalize(path).with_context(|| format!("Couldn't read {path}"))?;
+    // Unit tests work in temporary directories outside the project; the
+    // end-to-end tests cover where a file may be.
+    let root = if cfg!(test) { Path::new("/") } else { root() };
+    let inside = real.strip_prefix(root).map_err(|_| anyhow!("{path} is outside the project"))?;
+    if let Some(listed) = project_files().filter(|_| !cfg!(test)) {
+        let inside = inside.to_string_lossy();
+        if listed.binary_search_by(|p| p.as_str().cmp(&inside)).is_err() {
+            bail!("{path} is ignored by git");
+        }
+    }
+    let file = File::open(&real).with_context(|| format!("Couldn't read {path}"))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        bail!("{path} isn't a regular file");
+    }
+    if metadata.len() > MAX_FILE_BYTES {
+        return Ok(Contents::TooLarge);
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).with_context(|| format!("Couldn't read {path}"))?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Ok(Contents::TooLarge);
+    }
+    if bytes[..bytes.len().min(BINARY_PREFIX)].contains(&0) {
+        return Ok(Contents::Binary);
+    }
+    Ok(Contents::Text(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())))
+}
+
+/// A file's text, for a file that must be sendable.
+pub fn read_text(path: &str) -> Result<String> {
+    match read_to_send(path)? {
+        Contents::Text(text) => Ok(text),
+        Contents::TooLarge => bail!("{path} is over {} MB", MAX_FILE_BYTES >> 20),
+        Contents::Binary => bail!("{path} is binary"),
+    }
 }
 
 pub fn is_file(path: &str) -> bool {
