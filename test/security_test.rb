@@ -140,6 +140,18 @@ class SecurityTest < Minitest::Test
     attacker&.stop
   end
 
+  def test_base_and_pr_only_work_with_check
+    in_smelly_project do
+      [%w[test --pr], %w[--pr test], %w[rules --base main], %w[--base main rules]].each do |args|
+        status, _out, err = judgelint(*args)
+
+        assert_equal 2, status, args.join(" ")
+        assert_match(/--pr|--base/, err, args.join(" "))
+      end
+      assert_empty @server.requests
+    end
+  end
+
   def test_pr_judges_its_commits_not_whatever_else_is_in_the_checkout
     in_smelly_project do |dir|
       write(".gitignore", "app/local.rb\n")
