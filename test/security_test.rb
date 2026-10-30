@@ -141,6 +141,167 @@ class SecurityTest < Minitest::Test
     attacker&.stop
   end
 
+  def commit_all(message)
+    git("add", "-A")
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", message)
+  end
+
+  # Merges +branch+ into HEAD, detached, as GitHub makes a pull request's
+  # merge commit. Returns the merge.
+  def github_merge(onto, branch)
+    git("checkout", "-q", "--detach", onto)
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "--no-ff", "-q", "-m", "Merge", branch)
+    head
+  end
+
+  def head
+    Open3.capture2("git", "rev-parse", "HEAD").first.strip
+  end
+
+  # --pr in GitHub Actions' run for pull request 7, whose merge commit is +sha+.
+  def pr_on_github(sha, env = {})
+    out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret", "GITHUB_EVENT_NAME" => "pull_request",
+                                        "GITHUB_REF" => "refs/pull/7/merge", "GITHUB_SHA" => sha }.merge(env),
+                                      BINARY, "--pr")
+    [status.exitstatus, out, err]
+  end
+
+  def test_pr_on_githubs_merge_commit_compares_with_its_first_parent
+    attacker = StubSystemOne.new
+    Dir.mktmpdir("judgelint-origin") do |origin|
+      in_smelly_project do
+        write_config
+        git_repo
+        git("init", "--bare", "-q", origin)
+        git("remote", "add", "origin", origin)
+        git("checkout", "-q", "-b", "change")
+        write("app/new.rb", "SMELL\n")
+        write_config(server: attacker)
+        commit_all("change")
+        git("checkout", "-q", "main")
+        write("app/later.rb", "SMELL\n")
+        commit_all("main moves on")
+        merge = github_merge("main", "change")
+        # A base branch it would fail to fetch, to show it isn't used.
+        status, out, err = pr_on_github(merge, "GITHUB_BASE_REF" => "nowhere")
+
+        assert_equal 1, status, err
+        assert_match(/^1 file, 1 violations$/, out, "only the pull request's file, not main's")
+        assert_empty attacker.requests, "with the first parent's config"
+        refute_empty @server.requests
+      end
+    end
+  ensure
+    attacker&.stop
+  end
+
+  def test_a_stacked_pr_on_githubs_merge_commit_is_only_its_own_changes
+    in_smelly_project do
+      write_config
+      git_repo
+      git("checkout", "-q", "-b", "below")
+      write("app/one.rb", "SMELL\n")
+      commit_all("below")
+      git("checkout", "-q", "-b", "above")
+      write("app/two.rb", "SMELL\n")
+      commit_all("above")
+      git("checkout", "-q", "main")
+      write("app/later.rb", "SMELL\n")
+      commit_all("main moves on")
+      below = github_merge("main", "below")
+      # GitHub builds the merge on the merge of the pull request below.
+      merge = github_merge(below, "above")
+      status, out, err = pr_on_github(merge, "GITHUB_BASE_REF" => "main")
+
+      assert_equal 1, status, err
+      assert_match(/^1 file, 1 violations$/, out)
+    end
+  end
+
+  def test_a_merge_the_pr_committed_isnt_taken_for_githubs
+    attacker = StubSystemOne.new
+    Dir.mktmpdir("judgelint-origin") do |origin|
+      in_smelly_project do
+        write_config
+        git_repo
+        git("init", "--bare", "-q", origin)
+        git("remote", "add", "origin", origin)
+        git("checkout", "-q", "-b", "change")
+        write_config(server: attacker)
+        commit_all("change the config")
+        git("checkout", "-q", "main")
+        write("app/later.rb", "fine\n")
+        commit_all("main moves on")
+        git("push", "-q", "origin", "main")
+        git("checkout", "-q", "change")
+        write("app/new.rb", "SMELL\n")
+        commit_all("change")
+        # The pull request merges main into itself, and its head is checked out.
+        git("-c", "user.name=t", "-c", "user.email=t@example.com", "merge", "--no-ff", "-q", "-m", "Merge main", "main")
+        status, out, err = pr_on_github("0" * 40, "GITHUB_BASE_REF" => "main")
+
+        assert_equal 1, status, err
+        assert_match(/^1 file, 1 violations$/, out)
+        assert_empty attacker.requests, "its first parent's config is the pull request's"
+      end
+    end
+  ensure
+    attacker&.stop
+  end
+
+  def test_pr_takes_the_branch_a_stacked_pr_targets_from_githubs_event
+    Dir.mktmpdir("judgelint-origin") do |origin|
+      in_smelly_project do
+        write_config
+        git_repo
+        git("init", "--bare", "-q", origin)
+        git("remote", "add", "origin", origin)
+        git("checkout", "-q", "-b", "below")
+        write("app/one.rb", "SMELL\n")
+        commit_all("below")
+        git("push", "-q", "origin", "main", "below")
+        git("checkout", "-q", "-b", "above")
+        write("app/two.rb", "SMELL\n")
+        commit_all("above")
+        event = File.join(origin, "event.json")
+        File.write(event, JSON.generate({ "pull_request" => { "base" => { "ref" => "below" } } }))
+        # The head is checked out, so GitHub's merge commit isn't HEAD.
+        status, out, err = pr_on_github("0" * 40, "GITHUB_BASE_REF" => "main", "GITHUB_EVENT_PATH" => event)
+
+        assert_equal 1, status, err
+        assert_match(/^1 file, 1 violations$/, out, "not the stack's two")
+      end
+    end
+  end
+
+  def test_pr_on_a_shallow_checkout_of_githubs_merge_commit_fetches_its_parents
+    Dir.mktmpdir("judgelint-origin") do |origin|
+      in_smelly_project do |dir|
+        write_config
+        git_repo
+        git("init", "--bare", "-q", origin)
+        git("checkout", "-q", "-b", "change")
+        write("app/new.rb", "SMELL\n")
+        commit_all("change")
+        merge = github_merge("main", "change")
+        git("push", "-q", origin, "HEAD:refs/pull/7/merge")
+        # Like actions/checkout: one commit deep, fetched by its ref.
+        checkout = File.join(dir, "checkout")
+        Dir.mkdir(checkout)
+        Dir.chdir(checkout) do
+          git("init", "-q")
+          git("remote", "add", "origin", "file://#{origin}")
+          git("fetch", "-q", "--depth=1", "origin", "+refs/pull/7/merge:refs/remotes/pull/7/merge")
+          git("checkout", "-q", "--detach", merge)
+          status, out, err = pr_on_github(merge)
+
+          assert_equal 1, status, err
+          assert_match(/^1 file, 1 violations$/, out)
+        end
+      end
+    end
+  end
+
   def test_base_and_pr_only_work_with_check
     in_smelly_project do
       [%w[test --pr], %w[--pr test], %w[rules --base main], %w[--base main rules]].each do |args|

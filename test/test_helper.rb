@@ -11,6 +11,10 @@ require "open3"
 BINARY = ENV.fetch("JUDGELINT_BINARY", File.expand_path("../target/release/judgelint", __dir__))
 VERSION = File.read(File.expand_path("../Cargo.toml", __dir__))[/^version = "(.+)"/, 1]
 
+# Tests name the pull request they're checking; the one CI is running them
+# for would leak in.
+%w[GITHUB_BASE_REF GITHUB_EVENT_NAME GITHUB_EVENT_PATH GITHUB_REF GITHUB_SHA].each { |name| ENV.delete(name) }
+
 # A decision-model endpoint on localhost that answers both protocols. Every
 # question answers yes with probability 0.9 when the state contains "SMELL",
 # and 0.1 otherwise. Pass responses (each [status, body] or [status, body,

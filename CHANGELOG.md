@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.4 (unreleased)
+
+- On GitHub Actions' default checkout, `--pr` compares GitHub's merge
+  commit with its first parent, fetching it if the checkout is one commit
+  deep. The checkout needs no history, and a stacked pull request is
+  checked for its own changes, not the whole stack's. It's used only when
+  the run is a `pull_request` event for a `refs/pull/<n>/merge` ref and
+  HEAD is that run's commit, so a merge the pull request committed isn't
+  taken for GitHub's.
+- Otherwise, on GitHub Actions, `--pr` reads the branch a pull request
+  targets from its event before `GITHUB_BASE_REF`, which names the branch
+  a whole stack targets.
+
 ## 0.2.3 (2026-10-30)
 
 `--pr` uses the pull request's own specs and cache again, and hardening
