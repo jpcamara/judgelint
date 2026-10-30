@@ -192,8 +192,8 @@ fn check_ref(reference: &str) -> Result<()> {
 }
 
 /// A commit's files, read from git rather than the working tree: the base
-/// branch a pull request is checked against, whose rules, config and cache
-/// the pull request can't change, or the pull request's own commit.
+/// branch a pull request is checked against, whose config the pull request
+/// can't change, or the pull request's own commit.
 #[derive(Clone)]
 pub struct Commit {
     pub reference: String,
@@ -220,10 +220,6 @@ impl Commit {
         Ok(Commit { reference: reference.to_string(), dir: dir.to_path_buf(), files })
     }
 
-    pub fn files(&self) -> &[String] {
-        &self.files
-    }
-
     fn has(&self, path: &str) -> bool {
         self.files.binary_search_by(|f| f.as_str().cmp(path)).is_ok()
     }
@@ -244,13 +240,6 @@ impl Commit {
             return Ok(None);
         }
         git::run(&self.dir, &["cat-file", "blob", &format!("{}:./{path}", self.reference)]).map(Some)
-    }
-
-    pub fn read_text(&self, path: &str) -> Result<String> {
-        match self.read(path)? {
-            Some(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
-            None => bail!("{path} isn't on {}", self.reference),
-        }
     }
 }
 

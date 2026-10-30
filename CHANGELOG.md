@@ -2,8 +2,15 @@
 
 ## 0.2.3 (unreleased)
 
-Hardening from a fourth review.
+`--pr` uses the pull request's own specs and cache again, and hardening
+from a fourth review.
 
+- `--pr` reads only `.judgelint.yml` from the base branch, so a pull
+  request still can't change where its code is sent or which key goes with
+  it. Its own specs and cache are used, as in 0.2.0: a new convention
+  applies to the pull request that adds it, and CI can keep the cache
+  between pushes. 0.2.1 read both from the base branch, so new rules waited
+  for a merge and every push asked again.
 - A `##` in a file name or an endpoint's error is escaped in text output,
   so it can't run an Azure Pipelines (`##vso[`) or TeamCity command. JSON
   and SARIF write it as `#\u0023`, which reads back the same.
@@ -15,8 +22,6 @@ Hardening from a fourth review.
 - A changed file whose name isn't UTF-8 fails the run. It was read as
   whatever file its name decoded to.
 - `judgelint init` won't write through a `CONVENTIONS.md` link.
-- `--pr` warns when the pull request changes `.judgelint/cache.bin`. The
-  run doesn't use it, but once it's merged its answers decide later checks.
 - The README says that patterns skip names that start with a dot unless
   they name the dot.
 

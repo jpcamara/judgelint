@@ -253,18 +253,29 @@ run: one too large for the model, one the model refused to answer about,
 even in part, one that leads outside the project, or a binary one. Images,
 fonts, archives and other formats that are never code are left out instead.
 
+To keep answers between pushes, keep the cache in your CI's cache. On
+GitHub Actions:
+
+```yaml
+- uses: actions/cache@v4
+  with:
+    path: .judgelint/cache.bin
+    key: judgelint-${{ github.run_id }}
+    restore-keys: judgelint-
+- run: judgelint --pr --format github
+```
+
 ### Pull requests from people you don't trust
 
-`--pr` reads `.judgelint.yml`, the specs, and `.judgelint/cache.bin` from the
-base branch, not from the pull request, so a pull request can't change the
-rules it's checked against, where its code is sent, or the answers it's
-judged by. New or changed conventions apply once they're merged. The base
-branch's cache is read into memory, and the checkout's own is left alone.
+`--pr` reads `.judgelint.yml` from the base branch, not from the pull
+request, so a pull request can't change where its code is sent or which
+API key goes with it.
 
-A cache a pull request commits is used once it's merged, too, and nobody
-can review the answers in it. judgelint warns when a pull request changes
-it. Don't merge one from someone you don't trust; run judgelint on the base
-branch to update it.
+The pull request's own specs and cache are used, so a new or changed
+convention applies to it right away. That also means a pull request can
+change its rules or the answers in its cache. Review those like any other
+change, and have GitHub hold workflow runs on pull requests from forks
+until you approve them (Settings → Actions).
 
 `--pr` judges what the pull request committed. Anything else in the
 checkout, like a file an earlier CI step wrote, is never sent, whatever the
