@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.4 (unreleased)
+## 0.2.4 (2026-10-30)
 
 - On GitHub Actions' default checkout, `--pr` compares GitHub's merge
   commit with its first parent, fetching it if the checkout is one commit
