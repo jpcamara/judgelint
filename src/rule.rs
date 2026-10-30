@@ -17,7 +17,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config::{OneOrMany, list};
-use crate::glob::{self, Patterns};
+use crate::glob::Patterns;
+use crate::project::Project;
 use crate::source::Source;
 
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -226,10 +227,10 @@ impl Rule {
     }
 
     /// The directories a directory rule governs.
-    pub fn directories(&self) -> Result<Vec<String>> {
+    pub fn directories(&self, project: &Project) -> Result<Vec<String>> {
         let mut dirs = Vec::new();
         for pattern in &self.paths.raw {
-            dirs.extend(glob::directories(pattern)?.into_iter().filter(|d| self.applies_to(d)));
+            dirs.extend(project.directories(pattern)?.into_iter().filter(|d| self.applies_to(d)));
         }
         dirs.sort_unstable();
         dirs.dedup();

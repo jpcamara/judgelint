@@ -22,7 +22,8 @@ use serde::de::IgnoredAny;
 
 use crate::changes::Commit;
 use crate::config::{self, OneOrMany, RULES_DIR};
-use crate::glob::{self, Patterns};
+use crate::glob::Patterns;
+use crate::project::Project;
 use crate::rule::{Expected, Frontmatter, InlineExample, Rule, Severity};
 
 const PATTERNS: [&str; 3] = ["**/README.md", "**/CONVENTIONS.md", "**/*.judgelint.md"];
@@ -43,7 +44,12 @@ static FIRM: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(must|never|a
 
 /// Every rule: the rule files in .judgelint/rules, then the specs. With a
 /// commit, they're read from it instead of the working tree.
-pub fn discover(default_threshold: f64, ignore: &Patterns, commit: Option<&Commit>) -> Result<Vec<Rule>> {
+pub fn discover(
+    project: &Project,
+    default_threshold: f64,
+    ignore: &Patterns,
+    commit: Option<&Commit>,
+) -> Result<Vec<Rule>> {
     let rule_files = Patterns::new(vec![format!("{RULES_DIR}/*.md")])?;
     let spec_files = Patterns::new(PATTERNS.map(String::from).to_vec())?;
     let (rule_paths, spec_paths) = match commit {
@@ -52,11 +58,11 @@ pub fn discover(default_threshold: f64, ignore: &Patterns, commit: Option<&Commi
                 |patterns: &Patterns| commit.files().iter().filter(|p| patterns.is_match(p)).cloned().collect();
             (listed(&rule_files), listed(&spec_files))
         }
-        None => (glob::expand(&rule_files.raw)?, glob::files(&spec_files)?),
+        None => (project.expand(&rule_files.raw)?, project.files(&spec_files)?),
     };
     let read = |path: &str| match commit {
         Some(commit) => commit.read_text(path),
-        None => glob::read_text(path),
+        None => project.read_text(path),
     };
     let mut found = Vec::new();
     for path in rule_paths {

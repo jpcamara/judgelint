@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -19,6 +19,7 @@ use serde_json::{Map, Value};
 
 use crate::changes::Commit;
 use crate::glob::Patterns;
+use crate::project::{self, Project};
 use crate::protocol::Protocol;
 use crate::providers;
 
@@ -65,11 +66,6 @@ pub fn parse_yaml<T: DeserializeOwned + Default>(text: &str, path: &str) -> Resu
         return Ok(T::default());
     }
     serde_saphyr::from_str(text).map_err(|e| anyhow!("{path}: {e}"))
-}
-
-pub fn read(path: &str) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("Couldn't read {path}"))?;
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 static REFERENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
@@ -119,13 +115,15 @@ pub struct Config {
 
 impl Config {
     /// +model+, from --model, replaces the file's models. With a commit, the
-    /// file is read from it, unless it's named by an absolute path.
-    pub fn load(path: Option<&str>, model: Option<&str>, commit: Option<&Commit>) -> Result<Config> {
+    /// file is read from it, unless it's named by an absolute path. A config
+    /// named with --config can be anywhere; the project's own is read like
+    /// a file to send.
+    pub fn load(project: &Project, path: Option<&str>, model: Option<&str>, commit: Option<&Commit>) -> Result<Config> {
         let file = path.unwrap_or(FILE);
-        let text = match commit.filter(|_| !file.starts_with('/')) {
-            Some(commit) => commit.read(file)?.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
-            None if std::path::Path::new(file).exists() => Some(read(file)?),
-            None => None,
+        let text = match (commit.filter(|_| !file.starts_with('/')), path) {
+            (Some(commit), _) => commit.read(file)?.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            (None, Some(named)) => Some(project::read_named_config(named)?),
+            (None, None) => project.read_config(FILE)?,
         };
         let mut data: File = match text {
             Some(text) => parse_yaml(&text, file)?,
@@ -303,7 +301,7 @@ mod tests {
     /// The config a .judgelint.yml of +yaml+ gives, with --model +model+.
     fn load(yaml: &str, model: Option<&str>) -> Result<Config> {
         let dir = TempDir::new();
-        Config::load(Some(&dir.write(FILE, yaml)), model, None)
+        Config::load(&dir.project(), Some(&dir.write(FILE, yaml)), model, None)
     }
 
     fn labels(config: &Config) -> Vec<String> {

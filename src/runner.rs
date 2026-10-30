@@ -24,7 +24,7 @@ use crate::cache::{self, Cache};
 use crate::changes::{Changed, Changes};
 use crate::client::Client;
 use crate::config::{Config, THREADS, WINDOW_LINES};
-use crate::glob;
+use crate::project::Project;
 use crate::protocol::{Answer, Protocol};
 use crate::question::{Kind, Question, hex};
 use crate::rule::{Expected, Rule};
@@ -89,11 +89,11 @@ impl Job {
 
     /// The state, read again, which must be the one planned: a file that
     /// changed since would be cached under the wrong contents.
-    fn state(&self) -> Result<(Value, Vec<u8>)> {
+    fn state(&self, project: &Project) -> Result<(Value, Vec<u8>)> {
         let changed = || anyhow!("{} changed while judgelint ran; run it again", self.path);
         let source = self.source.as_ref().ok_or_else(changed)?;
-        let read = source.read_all().map_err(|_| changed())?;
-        let (state, json, digest) = state(source, &read, self.prose.as_deref()).map_err(|_| changed())?;
+        let read = source.read_all(project).map_err(|_| changed())?;
+        let (state, json, digest) = state(project, source, &read, self.prose.as_deref()).map_err(|_| changed())?;
         if digest != self.state_digest {
             return Err(changed());
         }
@@ -110,8 +110,13 @@ impl Job {
 }
 
 /// The state, its JSON and the JSON's SHA-256.
-fn state(source: &Source, read: &[String], prose: Option<&str>) -> Result<(Value, Vec<u8>, [u8; 32])> {
-    let state = source.state(read, prose)?;
+fn state(
+    project: &Project,
+    source: &Source,
+    read: &[String],
+    prose: Option<&str>,
+) -> Result<(Value, Vec<u8>, [u8; 32])> {
+    let state = source.state(project, read, prose)?;
     let json = serde_json::to_vec(&state)?;
     let digest = Sha256::digest(&json).into();
     Ok((state, json, digest))
@@ -127,6 +132,7 @@ struct Window {
 }
 
 pub struct Runner<'a> {
+    project: &'a Project,
     config: &'a Config,
     rules: &'a [Rule],
     /// A model is asked with the Decisions protocol, which sends a
@@ -141,13 +147,14 @@ pub struct Runner<'a> {
 }
 
 impl<'a> Runner<'a> {
-    pub fn new(config: &'a Config, rules: &'a [Rule]) -> Self {
+    pub fn new(project: &'a Project, config: &'a Config, rules: &'a [Rule]) -> Self {
         let mut context_group = Vec::with_capacity(rules.len());
         for (i, rule) in rules.iter().enumerate() {
             let same = rules[..i].iter().position(|other| other.context == rule.context && other.prose == rule.prose);
             context_group.push(same.map_or(i, |j| context_group[j]));
         }
         Runner {
+            project,
             config,
             rules,
             decisions: config.models.iter().any(|m| m.protocol == Protocol::Decisions),
@@ -165,10 +172,10 @@ impl<'a> Runner<'a> {
         if let Some(found) = self.context_files.lock().unwrap_or_else(|e| e.into_inner()).get(&group) {
             return Ok(found.clone());
         }
-        let files = glob::expand(&self.rules[group].context)?;
+        let files = self.project.expand(&self.rules[group].context)?;
         // Context is sent like the code, so it follows the same rules.
         for file in &files {
-            glob::read_text(file).with_context(|| format!("Context of {}", self.rules[group].id))?;
+            self.project.read_text(file).with_context(|| format!("Context of {}", self.rules[group].id))?;
         }
         let files = Arc::new(files);
         self.context_files.lock().unwrap_or_else(|e| e.into_inner()).insert(group, files.clone());
@@ -231,8 +238,8 @@ impl<'a> Runner<'a> {
                     (0..self.rules.len()).filter(|&i| self.rules[i].is_directory() && self.rules[i].applies_to(dir));
                 let mut jobs = Vec::new();
                 for group in self.by_context(applicable) {
-                    let source = Source::directory(dir, None, self.context_for(group[0])?)?;
-                    let read = source.read_all()?;
+                    let source = Source::directory(self.project, dir, None, self.context_for(group[0])?)?;
+                    let read = source.read_all(self.project)?;
                     let mut source = source.scan(&read);
                     let unjudgeable = source.unjudgeable;
                     // Planned as one line at least, so every rule has a verdict.
@@ -267,7 +274,8 @@ impl<'a> Runner<'a> {
         let mut missing: Vec<String> = Vec::new();
         self.untested.clear();
         for (index, rule) in self.rules.iter().enumerate() {
-            let found = [Expected::Pass, Expected::Fail].map(|expected| (expected, example_paths(rule, expected)));
+            let found = [Expected::Pass, Expected::Fail]
+                .map(|expected| (expected, example_paths(self.project, rule, expected)));
             let found = found.map(|(expected, paths)| paths.map(|paths| (expected, paths)));
             let [pass, fail] = found;
             let found = [pass?, fail?];
@@ -308,11 +316,11 @@ impl<'a> Runner<'a> {
             .map(|w| {
                 let context = self.context_for(w.rule)?;
                 let source = if self.rules[w.rule].is_directory() {
-                    Source::directory(&w.path, Some(&w.shown), context)?
+                    Source::directory(self.project, &w.path, Some(&w.shown), context)?
                 } else {
                     Source::file(&w.path, Some(&w.shown), context, w.text.clone())
                 };
-                let read = source.read_all()?;
+                let read = source.read_all(self.project)?;
                 self.plan(source.scan(&read), &read, &[w.rule], Some(&Changed::All), Some(w.expected))
             })
             .collect()
@@ -352,7 +360,7 @@ impl<'a> Runner<'a> {
             Arc::new(QuestionSet::new(by_rule))
         };
         let prose = rules.first().and_then(|&r| self.rules[r].prose.clone());
-        let (_, json, state_digest) = state(&source, read, prose.as_deref())?;
+        let (_, json, state_digest) = state(self.project, &source, read, prose.as_deref())?;
         // Decisions sends a structured state as its JSON text.
         let decisions = if self.decisions && prose.is_some() {
             2 + json.len() + json.iter().filter(|&&b| b == b'"' || b == b'\\').count()
@@ -546,7 +554,7 @@ impl<'a> Runner<'a> {
 
     /// Sends every request at once: a file's packed requests and every model's.
     fn ask(&self, job: &mut Job, clients: &[Client], cache: &Cache) -> Result<()> {
-        let (state, json) = job.state()?;
+        let (state, json) = job.state(self.project)?;
         let questions = job.questions.clone();
         let send = |request: &Request| {
             let client = &clients[request.model];
@@ -699,9 +707,13 @@ fn remembered<K: std::hash::Hash + Eq, T>(
 }
 
 /// A directory rule's examples are the directories under pass/ and fail/.
-fn example_paths(rule: &Rule, expected: Expected) -> Result<Vec<String>> {
+fn example_paths(project: &Project, rule: &Rule, expected: Expected) -> Result<Vec<String>> {
     let dir = format!("{}/{}", rule.examples_dir, expected.name());
-    if rule.is_directory() { glob::directories(&format!("{dir}/*")) } else { glob::expand(&[format!("{dir}/**/*")]) }
+    if rule.is_directory() {
+        project.directories(&format!("{dir}/*"))
+    } else {
+        project.expand(&[format!("{dir}/**/*")])
+    }
 }
 
 /// The lines a change touched in a window rule's range, or None for all of them.
@@ -781,7 +793,8 @@ mod tests {
     #[test]
     fn files_with_the_same_shape_share_their_questions() {
         let (config, rules) = (config(json!({})), [rule("smell", "")]);
-        let runner = Runner::new(&config, &rules);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
         let a = runner.prepare_file("app/a.rb", "x\n".into(), Some(&Changed::All)).unwrap();
         let b = runner.prepare_file("app/b.rb", "y\n".into(), Some(&Changed::All)).unwrap();
         assert!(Arc::ptr_eq(&a[0].questions, &b[0].questions));
@@ -790,7 +803,8 @@ mod tests {
     #[test]
     fn a_file_over_the_token_budget_is_skipped_before_anything_is_sent() {
         let (config, rules) = (config(json!({"max_state_tokens": 100})), [rule("smell", "")]);
-        let runner = Runner::new(&config, &rules);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
         let jobs = plan(&runner, &clients(&config), "app/a.rb", &"x".repeat(400));
         assert_eq!(runner.request_count(&jobs), 0);
         assert_eq!(jobs[0].verdicts()[0].status, Status::Skipped);
@@ -801,7 +815,8 @@ mod tests {
         let rules = [rule("a", ""), rule("b", "")];
         let file = "x\n".repeat(200);
         let config = config(json!({"batch_size": 4}));
-        let runner = Runner::new(&config, &rules);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
         let jobs = plan(&runner, &clients(&config), "app/a.rb", &file);
         let sizes: Vec<usize> = jobs[0].requests.iter().map(|r| r.questions.len()).collect();
         assert_eq!(sizes, [4, 4, 2]);
@@ -809,7 +824,8 @@ mod tests {
         assert_eq!(runner.estimated_tokens(&jobs), jobs[0].requests.iter().map(|r| r.tokens).sum::<usize>());
 
         let config = self::config(json!({"max_request_tokens": 120}));
-        let runner = Runner::new(&config, &rules);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
         assert!(runner.request_count(&plan(&runner, &clients(&config), "app/a.rb", &file)) > 3);
     }
 
@@ -817,17 +833,18 @@ mod tests {
     fn a_file_that_changes_or_goes_after_planning_is_not_sent() {
         let dir = TempDir::new();
         let (config, rules) = (config(json!({})), [rule("smell", "paths: [\"**/*.rb\"]")]);
-        let runner = Runner::new(&config, &rules);
+        let project = dir.project();
+        let runner = Runner::new(&project, &config, &rules);
         let clients = clients(&config);
         let cache_path = dir.path("cache.bin");
         let cache = Cache::open(Some(&cache_path)).unwrap();
         for change in ["y\n", ""] {
-            let path = dir.write("app/a.rb", "x\n");
-            let mut jobs = plan(&runner, &clients, &path, &std::fs::read_to_string(&path).unwrap());
+            let (path, file) = ("app/a.rb", dir.write("app/a.rb", "x\n"));
+            let mut jobs = plan(&runner, &clients, path, "x\n");
             if change.is_empty() {
-                std::fs::remove_file(&path).unwrap();
+                std::fs::remove_file(&file).unwrap();
             } else {
-                std::fs::write(&path, change).unwrap();
+                std::fs::write(&file, change).unwrap();
             }
             let error = runner.execute(&mut jobs, &clients, &cache).unwrap_err();
             assert_eq!(error.to_string(), format!("{path} changed while judgelint ran; run it again"));

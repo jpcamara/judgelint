@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::config::{self, OneOrMany};
+use crate::project::{Holds, Project};
 use crate::rule::{Frontmatter, Rule};
 
 /// A new directory for one test, removed when it's dropped.
@@ -16,6 +17,11 @@ impl TempDir {
         let dir = std::env::temp_dir().join(name);
         std::fs::create_dir_all(&dir).unwrap();
         TempDir(dir)
+    }
+
+    /// The directory as a project, outside any git repository.
+    pub fn project(&self) -> Project {
+        Project::open(&self.0, Holds::WorkingTree).unwrap()
     }
 
     /// The absolute path of +relative+ in the directory.

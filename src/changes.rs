@@ -3,11 +3,14 @@
 //! about, so it can't block new work.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
 use anyhow::{Result, bail};
 use regex::Regex;
+
+use crate::git;
 
 /// The lines changed in a file, or all of it for a new file.
 #[derive(Clone, Debug, PartialEq)]
@@ -37,11 +40,8 @@ const BASE_BRANCH_VARIABLES: [&str; 6] = [
 /// Every line changed since the merge base with +reference+.
 pub fn since(reference: &str) -> Result<Changes> {
     check_ref(reference)?;
-    let base = run(&["git", "merge-base", reference, "HEAD"])?;
-    let diff = run(&[
-        "git",
-        "-c",
-        "core.quotePath=false",
+    let base = git_text(&["merge-base", reference, "HEAD"])?;
+    let diff = git_text(&[
         "diff",
         "-U0",
         "--no-color",
@@ -55,12 +55,11 @@ pub fn since(reference: &str) -> Result<Changes> {
     let mut changed = parse_diff(&diff);
     // A changed file with no lines in the diff, like one .gitattributes
     // marks binary, is changed throughout.
-    let names = run(&["git", "diff", "--name-only", "-z", "--relative", "--diff-filter=d", base.trim()])?;
+    let names = git_text(&["diff", "--name-only", "-z", "--relative", "--diff-filter=d", base.trim()])?;
     for path in names.split('\0').filter(|p| !p.is_empty()) {
         changed.entry(path.to_string()).or_insert(Changed::All);
     }
-    for path in run(&["git", "ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|p| !p.is_empty())
-    {
+    for path in git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|p| !p.is_empty()) {
         changed.insert(path.to_string(), Changed::All);
     }
     Ok(changed)
@@ -78,13 +77,13 @@ pub fn pr_base() -> Result<String> {
     });
     let branch = match from_ci {
         Some(branch) => branch,
-        None => run(&["gh", "pr", "view", "--json", "baseRefName", "-q", ".baseRefName"])?.trim().to_string(),
+        None => gh_base_branch()?,
     };
     if branch.is_empty() {
         bail!("Couldn't find the pull request's base branch");
     }
     check_ref(&branch)?;
-    run(&["git", "fetch", "--no-tags", "--quiet", "origin", &branch])?;
+    git::run(Path::new("."), &["fetch", "--no-tags", "--quiet", "origin", &branch])?;
     Ok(format!("origin/{branch}"))
 }
 
@@ -186,12 +185,12 @@ pub struct Commit {
 impl Commit {
     pub fn new(reference: &str) -> Result<Commit> {
         check_ref(reference)?;
-        let listing = run_bytes(&["git", "ls-tree", "-r", "-z", reference])?;
+        let listing = git::run(Path::new("."), &["ls-tree", "-r", "-z", reference])?;
         let mut files: Vec<String> = listing
             .split(|&b| b == 0)
             .filter_map(|entry| {
-                let entry = String::from_utf8_lossy(entry);
-                let (meta, path) = entry.split_once('\t')?;
+                // A name that isn't UTF-8 can't be a spec, the config or the cache.
+                let (meta, path) = std::str::from_utf8(entry).ok()?.split_once('\t')?;
                 // Plain and executable files; not links or submodules.
                 (meta.starts_with("100644 blob") || meta.starts_with("100755 blob")).then(|| path.to_string())
             })
@@ -210,7 +209,7 @@ impl Commit {
         if self.files.binary_search_by(|f| f.as_str().cmp(path)).is_err() {
             return Ok(None);
         }
-        run_bytes(&["git", "cat-file", "blob", &format!("{}:./{path}", self.reference)]).map(Some)
+        git::run(Path::new("."), &["cat-file", "blob", &format!("{}:./{path}", self.reference)]).map(Some)
     }
 
     pub fn read_text(&self, path: &str) -> Result<String> {
@@ -221,22 +220,21 @@ impl Commit {
     }
 }
 
-fn run(args: &[&str]) -> Result<String> {
-    run_bytes(args).map(|out| String::from_utf8_lossy(&out).into_owned())
+fn git_text(args: &[&str]) -> Result<String> {
+    git::run(Path::new("."), args).map(|out| String::from_utf8_lossy(&out).into_owned())
 }
 
-fn run_bytes(args: &[&str]) -> Result<Vec<u8>> {
-    let output = Command::new(args[0])
-        .args(&args[1..])
+/// The base branch of the current branch's pull request, from the gh CLI.
+fn gh_base_branch() -> Result<String> {
+    let output = Command::new("gh")
+        .args(["pr", "view", "--json", "baseRefName", "-q", ".baseRefName"])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| anyhow::anyhow!("Couldn't run {}: {e}", args[0]))?;
+        .map_err(|e| anyhow::anyhow!("Couldn't run gh: {e}"))?;
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        let first = err.trim().lines().next().unwrap_or("").trim().to_string();
-        bail!("{} failed: {first}", args[..3.min(args.len())].join(" "));
+        bail!("gh pr view failed: {}", git::first_line(&output.stderr));
     }
-    Ok(output.stdout)
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 #[cfg(test)]
