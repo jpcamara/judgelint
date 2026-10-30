@@ -233,7 +233,15 @@ impl<'a> Runner<'a> {
                 for group in self.by_context(applicable) {
                     let source = Source::directory(dir, None, self.context_for(group[0])?)?;
                     let read = source.read_all()?;
-                    jobs.push(self.plan(source.scan(&read), &read, &group, Some(&Changed::All), None)?);
+                    let mut source = source.scan(&read);
+                    let too_large = source.too_large;
+                    // Planned as one line at least, so every rule has a verdict.
+                    if too_large {
+                        source.line_count = source.line_count.max(1);
+                    }
+                    let mut job = self.plan(source, &read, &group, Some(&Changed::All), None)?;
+                    job.skipped |= too_large;
+                    jobs.push(job);
                 }
                 Ok(jobs)
             })

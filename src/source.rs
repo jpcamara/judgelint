@@ -28,6 +28,8 @@ pub struct Source {
     pub line_count: u32,
     /// The lines with a judgehint.
     pub hints: Vec<u32>,
+    /// A directory with a file too large to send, which can't be judged.
+    pub too_large: bool,
 }
 
 impl Source {
@@ -40,15 +42,24 @@ impl Source {
             context,
             line_count: 0,
             hints: Vec::new(),
+            too_large: false,
         }
     }
 
     /// A directory and its files, except those judgelint won't send: ignored,
-    /// binary, too large, or leading outside the project.
+    /// binary, or leading outside the project. One too large to send leaves
+    /// the directory too large to judge.
     pub fn directory(dir: &str, shown_as: Option<&str>, context: Arc<Vec<String>>) -> Result<Source> {
-        let mut files = glob::expand(&[format!("{dir}/**/*")])?;
-        files.retain(|f| matches!(glob::read_to_send(f), Ok(glob::Contents::Text(_))));
-        Ok(Source { files: Some(files), ..Source::file(dir, shown_as, context, None) })
+        let mut too_large = false;
+        let mut files = Vec::new();
+        for file in glob::expand(&[format!("{dir}/**/*")])? {
+            match glob::read_to_send(&file)? {
+                glob::Contents::Text(_) => files.push(file),
+                glob::Contents::TooLarge => too_large = true,
+                glob::Contents::Binary | glob::Contents::Excluded(_) => {}
+            }
+        }
+        Ok(Source { files: Some(files), too_large, ..Source::file(dir, shown_as, context, None) })
     }
 
     pub fn is_directory(&self) -> bool {

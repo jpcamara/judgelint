@@ -88,7 +88,8 @@ pub fn expand(value: &str) -> Result<String> {
         .into_owned())
 }
 
-/// Whether a URL is on this machine: localhost, 127.x, or ::1.
+/// Whether a URL is on this machine: localhost, or a loopback address like
+/// 127.0.0.1 or ::1.
 pub fn is_local(url: &str) -> bool {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
@@ -97,7 +98,7 @@ pub fn is_local(url: &str) -> bool {
         Some(v6) => v6.split(']').next().unwrap_or(""),
         None => host.split(':').next().unwrap_or(""),
     };
-    host == "localhost" || host == "::1" || host.starts_with("127.")
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 #[derive(Deserialize, Default)]
@@ -408,7 +409,9 @@ mod tests {
         for local in ["http://localhost:8080", "http://127.0.0.1", "http://[::1]:1/v1", "https://user@localhost"] {
             assert!(is_local(local), "{local}");
         }
-        for remote in ["https://api.typesafe.ai", "http://localhost.example.com", "http://10.0.0.1", "http://127"] {
+        for remote in
+            ["https://api.typesafe.ai", "http://localhost.example.com", "http://10.0.0.1", "http://127.example.com"]
+        {
             assert!(!is_local(remote), "{remote}");
         }
         let custom = |base: &str| Endpoint::new(json!({"api_base": base, "model": "m"})).unwrap().price_per_million;

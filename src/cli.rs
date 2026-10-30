@@ -146,18 +146,19 @@ impl App {
         }
         let runner = Runner::new(&config, &rules);
         // A file no rule governs, that's ignored, or that's binary is left
-        // out, and so is one judgelint won't send, with a warning.
+        // out, and so is one judgelint won't send, with a warning. Checking a
+        // change, that one is skipped instead, which fails the run.
         let prepare = |path: &String| -> Result<Option<Vec<Job>>> {
             if config.ignore.is_match(path) || !rules.iter().any(|r| !r.is_directory() && r.applies_to(path)) {
                 return Ok(None);
             }
-            let text = match glob::read_to_send(path) {
-                Ok(Contents::Text(text)) => text,
-                Ok(Contents::Binary) => return Ok(None),
-                Ok(Contents::TooLarge) => return runner.skip_file(path).map(Some),
-                Err(e) => {
-                    eprintln!("judgelint: left out {e:#}");
-                    return Ok(None);
+            let text = match glob::read_to_send(path)? {
+                Contents::Text(text) => text,
+                Contents::Binary => return Ok(None),
+                Contents::TooLarge => return runner.skip_file(path).map(Some),
+                Contents::Excluded(why) => {
+                    eprintln!("judgelint: left out {why}");
+                    return if changes.is_some() { runner.skip_file(path).map(Some) } else { Ok(None) };
                 }
             };
             let lines = changes.as_ref().map_or(Some(&Changed::All), |c| c.get(path.as_str()));
@@ -348,12 +349,17 @@ impl App {
 /// has none: answers a pull request brings along could say anything.
 fn use_cache_from(commit: &Commit) -> Result<()> {
     let path = std::path::Path::new(config::CACHE);
+    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+    if dir.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
+        bail!("{} isn't a directory; judgelint keeps its cache in one", dir.display());
+    }
     let replace = || -> std::io::Result<()> {
         match commit.read(config::CACHE).map_err(std::io::Error::other)? {
             Some(bytes) => {
-                std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))?;
+                std::fs::create_dir_all(dir)?;
                 let temporary = format!("{}.{}.tmp", config::CACHE, std::process::id());
-                std::fs::write(&temporary, bytes)?;
+                let _ = std::fs::remove_file(&temporary);
+                std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?.write_all(&bytes)?;
                 // A rename replaces a link itself, never what it points to.
                 std::fs::rename(&temporary, path)
             }

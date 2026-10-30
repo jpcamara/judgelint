@@ -173,7 +173,8 @@ impl Client {
 /// Code and keys go over https, except to this machine. +shown+ is the URL
 /// as configured, for the error.
 fn refuse_plain_http(url: &str, shown: &str) -> Result<()> {
-    if !url.starts_with("http://") || config::is_local(url) {
+    let plain = url.get(..7).is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
+    if !plain || config::is_local(url) {
         return Ok(());
     }
     bail!("{shown} isn't https; judgelint sends code and keys over plain http only to localhost")
@@ -321,6 +322,8 @@ mod tests {
     fn plain_http_only_to_this_machine() {
         assert!(refuse_plain_http("http://127.0.0.1:9/v1", "x").is_ok());
         assert!(refuse_plain_http("https://api.example.com/v1", "x").is_ok());
+        assert!(refuse_plain_http("HTTP://api.example.com/v1", "x").is_err());
+        assert!(refuse_plain_http("http://127.example.com/v1", "x").is_err());
         let error = refuse_plain_http("http://api.example.com/key-123", "http://api.example.com/${KEY}").unwrap_err();
         assert!(error.to_string().contains("${KEY}") && !error.to_string().contains("key-123"), "{error}");
     }
