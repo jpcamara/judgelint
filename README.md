@@ -253,6 +253,9 @@ judged by. New or changed conventions apply once they're merged. Run
 judgelint with `--pr` on pull requests; a plain `judgelint` or `--base` run
 uses the checked-out files as they are.
 
+`--pr` trusts the branch a pull request targets, so only check pull requests
+against branches that only trusted people push to.
+
 Even so, give the job only the model's API key. The pull request's code is
 still what's being read, and the model can be argued with: a comment in the
 code can sway its answer. judgelint is a reviewer, not a security gate.
