@@ -42,13 +42,19 @@ struct Args {
     /// Files or directories to check
     paths: Vec<String>,
     #[command(flatten)]
+    change: Change,
+    #[command(flatten)]
     options: Options,
 }
 
 #[derive(Subcommand)]
 enum Command {
     /// Check the files the specs govern, or these (the default)
-    Check { paths: Vec<String> },
+    Check {
+        paths: Vec<String>,
+        #[command(flatten)]
+        change: Change,
+    },
     /// Judge each rule's examples (.judgelint/examples/<id>/pass and fail) and
     /// report what the model gets wrong
     Test { rules: Vec<String> },
@@ -60,14 +66,21 @@ enum Command {
     Init,
 }
 
+/// What a check is limited to. Only checks take these: a pull request's
+/// protections are a check's, so `test --pr` would promise what it can't do.
+#[derive(clap::Args, Default)]
+struct Change {
+    /// Check only what changed since the merge base with REF, uncommitted work included
+    #[arg(long, value_name = "REF", conflicts_with = "pr")]
+    base: Option<String>,
+    /// Check a pull request: its commits since its base branch, from CI
+    /// variables or the gh CLI, against that branch's config, rules and cache
+    #[arg(long)]
+    pr: bool,
+}
+
 #[derive(clap::Args)]
 struct Options {
-    /// Check only what changed since the merge base with REF, uncommitted work included
-    #[arg(long, value_name = "REF", global = true, conflicts_with = "pr")]
-    base: Option<String>,
-    /// --base the pull request's base branch, from CI variables or the gh CLI
-    #[arg(long, global = true)]
-    pr: bool,
     #[arg(short, long, value_enum, default_value_t = Format::Text, global = true)]
     format: Format,
     /// Ask this model instead of the config's: a provider from `judgelint
@@ -97,9 +110,14 @@ pub fn main() -> i32 {
         models: String::new(),
         options: args.options,
     };
+    let given = args.change;
     let result = match args.command {
-        None => app.check(args.paths),
-        Some(Command::Check { paths }) => app.check([args.paths, paths].concat()),
+        None => app.check(args.paths, given),
+        Some(Command::Check { paths, change }) => {
+            let change = Change { base: change.base.or(given.base), pr: change.pr || given.pr };
+            app.check([args.paths, paths].concat(), change)
+        }
+        Some(_) if given.base.is_some() || given.pr => Err(anyhow!("--base and --pr only work with check")),
         Some(Command::Test { rules }) => app.test(rules),
         Some(Command::Rules) => app.list_rules(),
         Some(Command::Providers) => app.list_providers(),
@@ -128,11 +146,14 @@ struct App {
 }
 
 impl App {
-    fn check(&mut self, paths: Vec<String>) -> Result<i32> {
-        let base = if self.options.pr { Some(changes::pr_base()?) } else { self.options.base.clone() };
+    fn check(&mut self, paths: Vec<String>, change: Change) -> Result<i32> {
+        if change.base.is_some() && change.pr {
+            bail!("--base and --pr can't be used together");
+        }
+        let base = if change.pr { Some(changes::pr_base()?) } else { change.base };
         // A pull request is checked against its base branch's rules, config
         // and cache, so it can't change what it's checked against.
-        let trusted = match (&base, self.options.pr) {
+        let trusted = match (&base, change.pr) {
             (Some(base), true) => Some(Commit::new(base)?),
             _ => None,
         };
@@ -143,10 +164,10 @@ impl App {
         // A pull request is its commits: what else is in the checkout, like
         // files an earlier step wrote, isn't part of it, whatever its
         // .gitignore says.
-        let holds = if self.options.pr { Holds::Tracked } else { Holds::WorkingTree };
+        let holds = if change.pr { Holds::Tracked } else { Holds::WorkingTree };
         let project = Project::open(Path::new("."), holds)?;
         let (config, rules) = self.load_rules(&project, trusted.as_ref())?;
-        let changes = base.as_deref().map(|base| changes::since(base, self.options.pr)).transpose()?;
+        let changes = base.as_deref().map(|base| changes::since(base, change.pr)).transpose()?;
         let candidates = check_paths(&project, &rules, &paths, changes.as_ref())?;
         if !rules.iter().any(|r| r.is_directory() || !r.context.is_empty()) {
             project.release();
