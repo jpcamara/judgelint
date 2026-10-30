@@ -20,9 +20,6 @@ Fixes from a third review of 0.2.1, which found ways around its fixes.
   - a changed file that leads outside the project, or to nothing.
 - Deleting or moving a file asks about its directory's directory rules.
 - An empty file is asked about by rules about whole files and directories.
-- The "where" answer no longer scales a change's verdict down. A new
-  violation next to an older, clearer one used to pass. The verdict
-  question still names only the changed lines.
 - If git fails to list the project's files, that's an error. Before, the
   gitignore check was skipped and ignored files could be sent.
 - The project's `.judgelint.yml` must be a regular file inside the project,
