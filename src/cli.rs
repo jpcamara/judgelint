@@ -3,6 +3,7 @@
 //! be checked is checked before the first paid request.
 
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -14,8 +15,9 @@ use crate::cache::Cache;
 use crate::changes::{self, Changed, Changes, Commit};
 use crate::client::Client;
 use crate::config::{self, Config};
-use crate::glob::{self, Contents, Patterns};
+use crate::glob::Patterns;
 use crate::paint::{self, Paint};
+use crate::project::{Contents, Holds, Project};
 use crate::providers;
 use crate::reporter::{Format, Reporter};
 use crate::rule::Rule;
@@ -138,13 +140,14 @@ impl App {
             use_cache_from(commit)?;
         }
         let loading = self.load_cache_early();
-        let (config, rules) = self.load_rules(trusted.as_ref())?;
+        let project = Project::open(Path::new("."), Holds::WorkingTree)?;
+        let (config, rules) = self.load_rules(&project, trusted.as_ref())?;
         let changes = base.as_deref().map(changes::since).transpose()?;
-        let candidates = check_paths(&rules, &paths, changes.as_ref())?;
+        let candidates = check_paths(&project, &rules, &paths, changes.as_ref())?;
         if !rules.iter().any(|r| r.is_directory() || !r.context.is_empty()) {
-            glob::release();
+            project.release();
         }
-        let runner = Runner::new(&config, &rules);
+        let runner = Runner::new(&project, &config, &rules);
         // A file no rule governs, that's ignored, or that's binary is left
         // out, and so is one judgelint won't send, with a warning. Checking a
         // change, that one is skipped instead, which fails the run.
@@ -152,7 +155,7 @@ impl App {
             if config.ignore.is_match(path) || !rules.iter().any(|r| !r.is_directory() && r.applies_to(path)) {
                 return Ok(None);
             }
-            let text = match glob::read_to_send(path)? {
+            let text = match project.read_to_send(path)? {
                 Contents::Text(text) => text,
                 Contents::Binary | Contents::Ignored => return Ok(None),
                 Contents::TooLarge => return runner.skip_file(path).map(Some),
@@ -178,10 +181,10 @@ impl App {
         }
         drop(candidates);
         let directories: Vec<String> =
-            check_directories(&rules, &paths)?.into_iter().filter(|d| !config.ignore.is_match(d)).collect();
+            check_directories(&project, &rules, &paths)?.into_iter().filter(|d| !config.ignore.is_match(d)).collect();
         let (clients, cache) = self.runner_parts(&config, loading)?;
         jobs.extend(runner.plan_directories(&directories, changes.as_ref())?);
-        glob::release();
+        project.release();
         runner.pack_all(&mut jobs, &clients, &cache)?;
         runner.check_keys(&jobs, &clients)?;
         self.guard_cost(&config, &runner, &jobs, &clients)?;
@@ -209,7 +212,8 @@ impl App {
 
     fn test(&mut self, ids: Vec<String>) -> Result<i32> {
         let loading = self.load_cache_early();
-        let (config, mut rules) = self.load_rules(None)?;
+        let project = Project::open(Path::new("."), Holds::WorkingTree)?;
+        let (config, mut rules) = self.load_rules(&project, None)?;
         if !ids.is_empty() {
             let unknown: Vec<&str> =
                 ids.iter().filter(|id| !rules.iter().any(|r| &r.id == *id)).map(String::as_str).collect();
@@ -219,9 +223,9 @@ impl App {
             rules.retain(|r| ids.contains(&r.id));
         }
         let (clients, cache) = self.runner_parts(&config, loading)?;
-        let mut runner = Runner::new(&config, &rules);
+        let mut runner = Runner::new(&project, &config, &rules);
         let mut jobs = runner.plan_examples()?;
-        glob::release();
+        project.release();
         runner.pack_all(&mut jobs, &clients, &cache)?;
         if jobs.is_empty() {
             let dir = rules.first().map_or("", |r| r.examples_dir.as_str());
@@ -277,12 +281,13 @@ impl App {
     }
 
     fn list_rules(&mut self) -> Result<i32> {
-        let (_config, rules) = self.load_rules(None)?;
+        let project = Project::open(Path::new("."), Holds::WorkingTree)?;
+        let (_config, rules) = self.load_rules(&project, None)?;
         for rule in &rules {
             let count = if rule.is_directory() {
-                format!("{} dirs", rule.directories()?.len())
+                format!("{} dirs", rule.directories(&project)?.len())
             } else {
-                format!("{} files", glob::files(&rule.paths)?.iter().filter(|p| rule.applies_to(p)).count())
+                format!("{} files", project.files(&rule.paths)?.iter().filter(|p| rule.applies_to(p)).count())
             };
             let text = rule.question.as_deref().unwrap_or(&rule.message);
             writeln!(self.out, "{:<24} {:<8} {count:>10}  {text}", rule.id, rule.severity())?;
@@ -315,9 +320,9 @@ impl App {
         Ok(0)
     }
 
-    fn load_rules(&self, commit: Option<&Commit>) -> Result<(Config, Vec<Rule>)> {
-        let config = Config::load(self.options.config.as_deref(), self.options.model.as_deref(), commit)?;
-        let rules = spec::discover(config.threshold, &config.ignore, commit)?;
+    fn load_rules(&self, project: &Project, commit: Option<&Commit>) -> Result<(Config, Vec<Rule>)> {
+        let config = Config::load(project, self.options.config.as_deref(), self.options.model.as_deref(), commit)?;
+        let rules = spec::discover(project, config.threshold, &config.ignore, commit)?;
         Ok((config, rules))
     }
 
@@ -371,10 +376,10 @@ fn use_cache_from(commit: &Commit) -> Result<()> {
 }
 
 /// The files to check, before the ignored and binary ones are left out.
-fn check_paths(rules: &[Rule], paths: &[String], changes: Option<&Changes>) -> Result<Vec<String>> {
+fn check_paths(project: &Project, rules: &[Rule], paths: &[String], changes: Option<&Changes>) -> Result<Vec<String>> {
     if !paths.is_empty() {
-        let found = glob::expand_arguments(paths)?;
-        let missing: Vec<&str> = found.iter().filter(|p| !glob::is_file(p)).map(String::as_str).collect();
+        let found = project.expand_arguments(paths)?;
+        let missing: Vec<&str> = found.iter().filter(|p| !project.is_file(p)).map(String::as_str).collect();
         if !missing.is_empty() {
             bail!("No such file: {}", missing.join(", "));
         }
@@ -384,7 +389,7 @@ fn check_paths(rules: &[Rule], paths: &[String], changes: Option<&Changes>) -> R
         });
     }
     if let Some(changes) = changes {
-        let mut changed: Vec<String> = changes.keys().filter(|p| glob::is_file(p)).cloned().collect();
+        let mut changed: Vec<String> = changes.keys().filter(|p| project.is_file(p)).cloned().collect();
         changed.sort_unstable();
         return Ok(changed);
     }
@@ -394,15 +399,15 @@ fn check_paths(rules: &[Rule], paths: &[String], changes: Option<&Changes>) -> R
             patterns.push(pattern.clone());
         }
     }
-    glob::files(&Patterns::new(patterns)?)
+    project.files(&Patterns::new(patterns)?)
 }
 
 /// The directories directory rules govern; with paths named, those the
 /// paths are in or are. With a change, the runner keeps those it touched.
-fn check_directories(rules: &[Rule], paths: &[String]) -> Result<Vec<String>> {
+fn check_directories(project: &Project, rules: &[Rule], paths: &[String]) -> Result<Vec<String>> {
     let mut directories = Vec::new();
     for rule in rules.iter().filter(|r| r.is_directory()) {
-        directories.extend(rule.directories()?);
+        directories.extend(rule.directories(project)?);
     }
     directories.sort_unstable();
     directories.dedup();

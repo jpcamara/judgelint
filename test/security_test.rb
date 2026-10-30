@@ -55,6 +55,34 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_config_that_leads_outside_the_project_is_an_error
+    Dir.mktmpdir("judgelint-outside") do |outside|
+      File.write(File.join(outside, "secret.yml"), "token: OUTSIDE\n")
+      in_smelly_project do
+        File.symlink(File.join(outside, "secret.yml"), ".judgelint.yml")
+        _out, err, status = Open3.capture3(BINARY, "app/bad.rb", "--no-cache")
+
+        assert_equal 2, status.exitstatus
+        assert_match(/\.judgelint\.yml is outside the project/, err)
+        refute_includes err, "OUTSIDE"
+      end
+    end
+  end
+
+  def test_git_failing_to_list_the_files_is_an_error
+    in_smelly_project do
+      write("config/master.key", "SMELL\n")
+      write(".gitignore", "master.key\n")
+      git_repo
+      File.write(".git/index", "not an index")
+      status, _out, err = judgelint
+
+      assert_equal 2, status
+      assert_match(/git couldn't list the project's files/, err)
+      assert_empty @server.requests
+    end
+  end
+
   def test_a_pipe_named_as_context_is_an_error_not_a_wait
     in_smelly_project do
       File.mkfifo("app/pipe")

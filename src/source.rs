@@ -13,7 +13,7 @@ use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::glob;
+use crate::project::{Contents, Project};
 
 static HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:#|//|--|/\*|<!--|;)\s*judgehint:").unwrap());
 
@@ -50,14 +50,19 @@ impl Source {
     /// A directory and its files, except the ignored and binary ones. One
     /// judgelint won't send, too large or leading outside the project, leaves
     /// the directory unjudgeable.
-    pub fn directory(dir: &str, shown_as: Option<&str>, context: Arc<Vec<String>>) -> Result<Source> {
+    pub fn directory(
+        project: &Project,
+        dir: &str,
+        shown_as: Option<&str>,
+        context: Arc<Vec<String>>,
+    ) -> Result<Source> {
         let mut unjudgeable = false;
         let mut files = Vec::new();
-        for file in glob::expand(&[format!("{dir}/**/*")])? {
-            match glob::read_to_send(&file)? {
-                glob::Contents::Text(_) => files.push(file),
-                glob::Contents::Binary | glob::Contents::Ignored => {}
-                glob::Contents::TooLarge | glob::Contents::Excluded(_) => unjudgeable = true,
+        for file in project.expand(&[format!("{dir}/**/*")])? {
+            match project.read_to_send(&file)? {
+                Contents::Text(_) => files.push(file),
+                Contents::Binary | Contents::Ignored => {}
+                Contents::TooLarge | Contents::Excluded(_) => unjudgeable = true,
             }
         }
         Ok(Source { files: Some(files), unjudgeable, ..Source::file(dir, shown_as, context, None) })
@@ -88,16 +93,16 @@ impl Source {
         }
     }
 
-    pub fn read_all(&self) -> Result<Vec<String>> {
+    pub fn read_all(&self, project: &Project) -> Result<Vec<String>> {
         if let Some(text) = &self.text {
             return Ok(vec![text.to_string()]);
         }
-        self.file_list().into_iter().map(glob::read_text).collect()
+        self.file_list().into_iter().map(|file| project.read_text(file)).collect()
     }
 
     /// The state: the numbered text the model is shown, or {team_rules, file}
     /// with a spec's prose.
-    pub fn state(&self, read: &[String], prose: Option<&str>) -> Result<Value> {
+    pub fn state(&self, project: &Project, read: &[String], prose: Option<&str>) -> Result<Value> {
         let mut text = String::with_capacity(read.iter().map(|r| r.len() + r.len() / 4).sum::<usize>() + 64);
         if self.is_directory() {
             let _ = write!(text, "Directory: {}\n\n", self.shown_as);
@@ -118,7 +123,7 @@ impl Source {
                 if i > 0 {
                     text.push('\n');
                 }
-                let _ = write!(text, "Path: {file}\n\n{}", glob::read_text(file)?);
+                let _ = write!(text, "Path: {file}\n\n{}", project.read_text(file)?);
             }
         }
         Ok(match prose {
@@ -170,7 +175,10 @@ mod tests {
     #[test]
     fn numbers_lines_and_covers_the_file_with_windows() {
         let (source, read) = file("a.rb", Some("shown.rb"), "one\ntwo\nthree");
-        assert_eq!(source.state(&read, None).unwrap(), json!("Path: shown.rb\n\n1: one\n2: two\n3: three\n"));
+        assert_eq!(
+            source.state(&TempDir::new().project(), &read, None).unwrap(),
+            json!("Path: shown.rb\n\n1: one\n2: two\n3: three\n")
+        );
         assert_eq!(source.windows(2), [(1, 2), (3, 3)]);
         assert_eq!(source.windows(40), [(1, 3)]);
     }
@@ -179,7 +187,10 @@ mod tests {
     fn judgehints_are_read_from_comments_only() {
         let (source, read) = file("app/a.rb", None, "x # judgehint: kept short\n");
         assert_eq!((source.line_count, source.hinted(1, 1)), (1, true));
-        assert_eq!(source.state(&read, None).unwrap(), json!("Path: app/a.rb\n\n1: x # judgehint: kept short\n"));
+        assert_eq!(
+            source.state(&TempDir::new().project(), &read, None).unwrap(),
+            json!("Path: app/a.rb\n\n1: x # judgehint: kept short\n")
+        );
 
         let (source, _) = file("app/a.rb", None, "raise \"judgehint: not a comment\"\n");
         assert!(!source.hinted(1, 1));
@@ -190,14 +201,12 @@ mod tests {
         let dir = TempDir::new();
         dir.write("a/index.rb", "one\n");
         dir.write("a/helper.rb", "SMELL\n");
-        let types = dir.write("types.rb", "Types = 1\n");
-        let a = dir.path("a");
-        let source = Source::directory(&a, None, Arc::new(vec![types.clone()])).unwrap();
-        let read = source.read_all().unwrap();
-        let expected = format!(
-            "Directory: {a}\n\nPath: {a}/helper.rb\n\n1: SMELL\n\nPath: {a}/index.rb\n\n1: one\n\n\
-             Context, for reference only (not under review):\n\nPath: {types}\n\nTypes = 1\n"
-        );
-        assert_eq!(source.scan(&read).state(&read, None).unwrap(), Value::String(expected));
+        dir.write("types.rb", "Types = 1\n");
+        let project = dir.project();
+        let source = Source::directory(&project, "a", None, Arc::new(vec!["types.rb".into()])).unwrap();
+        let read = source.read_all(&project).unwrap();
+        let expected = "Directory: a\n\nPath: a/helper.rb\n\n1: SMELL\n\nPath: a/index.rb\n\n1: one\n\n\
+                        Context, for reference only (not under review):\n\nPath: types.rb\n\nTypes = 1\n";
+        assert_eq!(source.scan(&read).state(&project, &read, None).unwrap(), json!(expected));
     }
 }
