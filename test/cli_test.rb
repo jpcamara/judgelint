@@ -216,6 +216,7 @@ class CLITest < Minitest::Test
       git("remote", "add", "origin", "#{dir}/origin.git")
       git("push", "-q", "origin", "main")
       write("app/good.rb", "SMELL\n")
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qam", "change")
       runners.each do |name, run|
         status, out, = run.call(["--pr"], extra_env: { "GITHUB_BASE_REF" => "main" })
 
