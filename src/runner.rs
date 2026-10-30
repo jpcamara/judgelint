@@ -12,6 +12,7 @@
 //! files were given in, so output doesn't depend on timing.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -119,6 +120,27 @@ fn state(
     let json = serde_json::to_vec(&state)?;
     let digest = Sha256::digest(&json).into();
     Ok((state, json, digest))
+}
+
+/// A run's first failed request, or other error, and whether there's been
+/// one: once there has, no more requests go out.
+#[derive(Default)]
+struct Failure {
+    stopped: AtomicBool,
+    first: Mutex<Option<anyhow::Error>>,
+}
+
+impl Failure {
+    /// Keeps the first error, then stops the run, so what stops it is never
+    /// kept in place of what failed.
+    fn record(&self, error: anyhow::Error) {
+        self.first.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(error);
+        self.stopped.store(true, Ordering::Relaxed);
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed)
+    }
 }
 
 /// One range's averaged answers: the probability it breaks the rule, and
@@ -537,26 +559,42 @@ impl<'a> Runner<'a> {
         result.and(saved)
     }
 
-    /// Sends what's left, REQUESTS_AT_ONCE at a time across every file, and
-    /// takes no new file after an error: a dead endpoint fails the run once,
-    /// not once a file.
+    /// Sends what's left, REQUESTS_AT_ONCE at a time across every file. After
+    /// a request fails no more are sent, from any file: a dead endpoint fails
+    /// the run once. Answers that came back are kept.
     fn send_all(&self, jobs: &mut [Job], clients: &[Client], cache: &Cache) -> Result<()> {
+        let failure = Failure::default();
         let pool = rayon::ThreadPoolBuilder::new().num_threads(REQUESTS_AT_ONCE).build()?;
         pool.install(|| {
-            jobs.par_iter_mut().filter(|job| job.verdicts.is_none()).try_for_each(|job| {
-                self.ask(job, clients, cache)?;
-                let verdicts = self.verdicts(job);
-                job.settle(verdicts);
-                Ok(())
-            })
-        })
+            jobs.par_iter_mut().filter(|job| job.verdicts.is_none()).for_each(|job| {
+                match self.ask(job, clients, cache, &failure) {
+                    Ok(true) => {
+                        let verdicts = self.verdicts(job);
+                        job.settle(verdicts);
+                    }
+                    Ok(false) => {}
+                    Err(e) => failure.record(e),
+                }
+            });
+        });
+        match failure.first.into_inner().unwrap_or_else(|e| e.into_inner()) {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
-    /// Sends a file's requests at once: its packed requests and every model's.
-    fn ask(&self, job: &mut Job, clients: &[Client], cache: &Cache) -> Result<()> {
+    /// Sends a file's requests at once: its packed requests and every
+    /// model's. False when the run stopped before they were all answered.
+    fn ask(&self, job: &mut Job, clients: &[Client], cache: &Cache, failure: &Failure) -> Result<bool> {
+        if failure.stopped() {
+            return Ok(false);
+        }
         let (state, json) = job.state(self.project)?;
         let questions = job.questions.clone();
         let send = |request: &Request| {
+            if failure.stopped() {
+                return None;
+            }
             let client = &clients[request.model];
             let state = if client.protocol() == Protocol::Decisions && job.prose.is_some() {
                 Value::String(String::from_utf8_lossy(&json).into_owned())
@@ -564,24 +602,29 @@ impl<'a> Runner<'a> {
                 state.clone()
             };
             let asked: Vec<&Question> = request.questions.iter().map(|&i| &*questions.flat[i as usize]).collect();
-            client.judge(state, &asked)
+            client.judge(state, &asked).map_err(|e| failure.record(e)).ok()
         };
-        let results: Vec<Result<Vec<Option<Answer>>>> = job.requests.par_iter().map(send).collect();
+        let results: Vec<Option<Vec<Option<Answer>>>> = job.requests.par_iter().map(send).collect();
         let state = hex(&job.state_digest);
         job.answers.resize_with(clients.len(), Vec::new);
+        let mut complete = true;
         for (request, answers) in job.requests.iter().zip(results) {
+            let Some(answers) = answers else {
+                complete = false;
+                continue;
+            };
             let model = request.model;
             let label = clients[model].cache_label()?;
             let kept = &mut job.answers[model];
             kept.resize_with(questions.flat.len(), || None);
-            for (&i, answer) in request.questions.iter().zip(answers?) {
+            for (&i, answer) in request.questions.iter().zip(answers) {
                 if let Some(answer) = &answer {
                     cache.put(&cache::key(&questions.flat[i as usize].digest, &state, label), answer.values())?;
                 }
                 kept[i as usize] = answer;
             }
         }
-        Ok(())
+        Ok(complete)
     }
 
     fn verdicts(&self, job: &Job) -> Vec<Verdict> {
@@ -834,5 +877,43 @@ mod tests {
     fn a_finding_names_a_place_only_when_the_models_agree_on_one() {
         assert_eq!(agreed(&[0.45, 0.55, 0.0]), Some(1));
         assert_eq!(agreed(&[0.4, 0.35, 0.25]), None, "no line has half");
+    }
+
+    #[test]
+    fn a_window_no_model_answered_leaves_the_rule_refused_unless_another_breaks_it() {
+        let (config, rules) = (config(json!({})), [rule("smell", "")]);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
+        let mut job = runner.prepare_file("app/a.rb", "x\n".repeat(80), Some(&Changed::All)).unwrap().remove(0);
+        // A yes/no verdict for each of two windows, from one model.
+        let answers =
+            |first: Option<f64>, second: Option<f64>| vec![vec![first.map(Answer::Yes), second.map(Answer::Yes)]];
+        job.answers = answers(Some(0.1), None);
+        let refused = &runner.verdicts(&job)[0];
+        assert_eq!((refused.status, refused.lines), (Status::Refused, Some((41, 80))));
+        job.answers = answers(Some(0.9), None);
+        assert_eq!(runner.verdicts(&job)[0].status, Status::Violation);
+        job.answers = answers(Some(0.1), Some(0.1));
+        assert_eq!(runner.verdicts(&job)[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn a_state_past_every_models_limit_is_skipped_before_its_questions_are_made() {
+        let (config, rules) = (config(json!({"max_state_tokens": 100})), [rule("smell", "")]);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
+        let jobs = runner.prepare_file("app/a.rb", "\n".repeat(10_000), Some(&Changed::All)).unwrap();
+        assert!(jobs[0].skipped && jobs[0].questions.flat.is_empty());
+        assert_eq!(runner.verdicts(&jobs[0])[0].status, Status::Skipped);
+    }
+
+    #[test]
+    fn an_empty_file_is_asked_about_by_a_rule_about_the_whole_file() {
+        let (config, rules) = (config(json!({})), [rule("exports", "scope: file"), rule("smell", "")]);
+        let project = TempDir::new().project();
+        let runner = Runner::new(&project, &config, &rules);
+        let jobs = runner.prepare_file("app/a.rb", String::new(), Some(&Changed::All)).unwrap();
+        let asked: Vec<usize> = jobs[0].questions.by_rule.iter().map(|(rule, _)| *rule).collect();
+        assert_eq!(asked, [0], "a window rule has no lines to ask about");
     }
 }

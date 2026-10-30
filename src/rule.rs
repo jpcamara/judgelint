@@ -251,7 +251,7 @@ impl Rule {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec;
+    use crate::{spec, testing};
 
     fn rule_file(id: &str, content: &str) -> Result<Vec<Rule>> {
         spec::parse(&format!(".judgelint/rules/{id}.md"), content, 0.7, true)
@@ -311,5 +311,12 @@ hide bugs.
             let content = format!("---\nquestion: Does this code smell?\nthreshold: {threshold}\n---\n");
             assert!(rule_file("smell", &content).is_err(), "{threshold}");
         }
+    }
+
+    #[test]
+    fn an_empty_file_is_one_range_to_a_rule_about_the_whole_file() {
+        let empty = Source::file("app/a.rb", None, Arc::default(), None).scan(&[String::new()]);
+        assert_eq!(testing::rule("whole", "scope: file").ranges(&empty, 40), [(1, 1)]);
+        assert!(testing::rule("window", "").ranges(&empty, 40).is_empty());
     }
 }

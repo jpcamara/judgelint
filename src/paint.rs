@@ -51,10 +51,13 @@ impl Paint {
 
 /// +text+ with control characters escaped, for text from a file name, a
 /// repository or an endpoint: a newline or an escape sequence in it could
-/// otherwise forge a line of output, like a CI annotation.
+/// otherwise forge a line of output. So could a CI workflow command, which
+/// GitHub Actions reads from a line that starts with `::` or holds `##[`;
+/// those get a backslash.
 pub fn clean(text: &str) -> Cow<'_, str> {
     let control = |c: char| c.is_control() && c != '\t';
-    if !text.chars().any(control) {
+    let command = |text: &str| text.trim_start().starts_with("::") || text.contains("##[");
+    if !text.chars().any(control) && !command(text) {
         return Cow::Borrowed(text);
     }
     let mut cleaned = String::with_capacity(text.len() + 8);
@@ -65,14 +68,24 @@ pub fn clean(text: &str) -> Cow<'_, str> {
             cleaned.push(c);
         }
     }
+    let mut cleaned = cleaned.replace("##[", "##\\[");
+    if cleaned.trim_start().starts_with("::") {
+        cleaned.insert(cleaned.len() - cleaned.trim_start().len(), '\\');
+    }
     Cow::Owned(cleaned)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::clean;
+
     #[test]
-    fn control_characters_are_escaped() {
-        assert_eq!(super::clean("app/a.rb\tok"), "app/a.rb\tok");
-        assert_eq!(super::clean("a\n::error::forged\x1b[31m"), "a\\n::error::forged\\u{1b}[31m");
+    fn control_characters_and_workflow_commands_are_escaped() {
+        assert_eq!(clean("app/a.rb\tok"), "app/a.rb\tok");
+        assert_eq!(clean("a\n::error::forged\x1b[31m"), "a\\n::error::forged\\u{1b}[31m");
+        assert_eq!(clean("::error::forged.rb"), "\\::error::forged.rb");
+        assert_eq!(clean(" ::warning::x"), " \\::warning::x");
+        assert_eq!(clean("bad ##[error]forged"), "bad ##\\[error]forged");
+        assert_eq!(clean("lib/a::b.rb"), "lib/a::b.rb");
     }
 }

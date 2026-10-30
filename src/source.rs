@@ -219,4 +219,23 @@ mod tests {
                         Context, for reference only (not under review):\n\nPath: types.rb\n\nTypes = 1\n";
         assert_eq!(source.scan(&read).state(&project, &read, None).unwrap(), json!(expected));
     }
+
+    #[test]
+    fn a_directory_that_cant_all_be_sent_is_unjudgeable() {
+        let dir = TempDir::new();
+        dir.write("a/index.rb", "one\n");
+        std::fs::write(dir.path("a/data.bin"), b"x\0y").unwrap();
+        std::fs::write(dir.path("a/logo.png"), b"x\0y").unwrap();
+        // A project lists its files once, so each look is a new one.
+        let source = |changed| Source::directory(&dir.project(), "a", None, Arc::default(), changed).unwrap();
+        assert_eq!(source(false).files, Some(vec!["a/index.rb".to_string()]), "binary files are left out");
+        assert!(source(true).unjudgeable, "but not from a change, unless they're never code");
+        std::fs::remove_file(dir.path("a/data.bin")).unwrap();
+        assert!(!source(true).unjudgeable);
+        for i in 0..2 {
+            dir.write(&format!("a/big{i}.rb"), &"x".repeat(3 << 20));
+        }
+        let big = source(false);
+        assert!(big.unjudgeable && big.files == Some(Vec::new()), "4 MB together at most");
+    }
 }

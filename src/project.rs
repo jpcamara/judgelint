@@ -8,8 +8,9 @@
 //! literal directory in a pattern can be a link, and a link to a file is the
 //! file.
 
+use std::collections::HashSet;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{ErrorKind, Read};
 use std::os::fd::OwnedFd;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
@@ -19,6 +20,7 @@ use ignore::{WalkBuilder, WalkState};
 use rustix::fs::{Mode, OFlags};
 use rustix::io::Errno;
 
+use crate::changes::Commit;
 use crate::git;
 use crate::glob::{self, Patterns};
 
@@ -93,6 +95,9 @@ pub struct Project {
     dir: OwnedFd,
     /// In a git repository, the files git lists, sorted.
     listed: Option<Vec<String>>,
+    /// Holding only tracked files, the commit they're from, and those the
+    /// working tree has changed since, which are read as committed.
+    committed: Option<(Commit, HashSet<String>)>,
     /// What's outside hidden directories, listed once and shared by the
     /// globs that look there, until it's released.
     tree: Mutex<Option<Arc<Vec<Entry>>>>,
@@ -104,7 +109,19 @@ impl Project {
         let dir = rustix::fs::open(&root, OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC, Mode::empty())
             .with_context(|| format!("Couldn't open {}", root.display()))?;
         let listed = git::files(&root, holds == Holds::WorkingTree)?;
-        Ok(Project { root, dir, listed, tree: Mutex::new(None) })
+        let committed = match holds {
+            Holds::Tracked if listed.is_some() => {
+                let changed = git::run(&root, &["diff", "--name-only", "-z", "--no-renames", "--relative", "HEAD"])?;
+                let changed = String::from_utf8_lossy(&changed)
+                    .split('\0')
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                Some((Commit::new(&root, "HEAD")?, changed))
+            }
+            _ => None,
+        };
+        Ok(Project { root, dir, listed, committed, tree: Mutex::new(None) })
     }
 
     /// A path relative to the project, or an absolute one, on disk.
@@ -118,6 +135,11 @@ impl Project {
 
     pub fn is_directory(&self, path: &str) -> bool {
         self.at(path).is_dir()
+    }
+
+    /// A directory, not a link to one.
+    pub fn is_real_directory(&self, path: &str) -> bool {
+        fs::symlink_metadata(self.at(path)).is_ok_and(|m| m.is_dir())
     }
 
     /// Lets go of the listing once the files are found.
@@ -247,24 +269,42 @@ impl Project {
         opened.map(File::from)
     }
 
-    /// Opens a file to send, with its path relative to the project, or None
-    /// for one that leads outside it, through a link or otherwise.
-    fn open_inside(&self, path: &str) -> Result<Option<(File, String)>> {
+    /// Opens a file to send, with its path relative to the project.
+    fn open_inside(&self, path: &str) -> Result<Opened> {
         let couldnt = || format!("Couldn't read {path}");
         let relative = Path::new(path.strip_prefix("./").unwrap_or(path));
         if relative.components().all(|c| matches!(c, Component::Normal(_))) {
             match self.open_without_links(relative) {
-                Ok(file) => return Ok(Some((file, relative.to_string_lossy().into_owned()))),
+                Ok(file) => return Ok(Opened::File(file, relative.to_string_lossy().into_owned())),
                 Err(Errno::LOOP) => {}
+                Err(Errno::NOENT | Errno::NOTDIR) => return Ok(Opened::Missing),
                 Err(e) => return Err(std::io::Error::from(e)).with_context(couldnt),
             }
         }
         // A link, or a path that leaves and may come back: where it leads,
         // opened without links so it can't lead anywhere else by then.
-        let real = fs::canonicalize(self.at(path)).with_context(couldnt)?;
-        let Ok(inside) = real.strip_prefix(&self.root) else { return Ok(None) };
+        let real = match fs::canonicalize(self.at(path)) {
+            Ok(real) => real,
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => return Ok(Opened::Missing),
+            Err(e) => return Err(e).with_context(couldnt),
+        };
+        let Ok(inside) = real.strip_prefix(&self.root) else { return Ok(Opened::Outside) };
         let file = self.open_without_links(inside).map_err(std::io::Error::from).with_context(couldnt)?;
-        Ok(Some((file, inside.to_string_lossy().into_owned())))
+        Ok(Opened::File(file, inside.to_string_lossy().into_owned()))
+    }
+
+    /// A file the working tree changed since the pull request's commit, as
+    /// committed: what judgelint judges is the pull request, not what a step
+    /// before it wrote over it.
+    fn as_committed(&self, path: &str, inside: &str) -> Option<Result<Contents>> {
+        let (commit, _) = self.committed.as_ref().filter(|(_, changed)| changed.contains(inside))?;
+        Some((|| {
+            Ok(match commit.size(inside)? {
+                None => Contents::Excluded(format!("{path} isn't a file in the pull request's commit")),
+                Some(size) if size > MAX_FILE_BYTES => Contents::TooLarge,
+                Some(_) => text_or_binary(commit.read(inside)?.unwrap_or_default()),
+            })
+        })())
     }
 
     /// Reads a file to send to a model. Every file a model sees comes through
@@ -273,23 +313,28 @@ impl Project {
     /// is Excluded, with why; a file that can't be read is an error.
     pub fn read_to_send(&self, path: &str) -> Result<Contents> {
         let excluded = |why: &str| Ok(Contents::Excluded(format!("{path} {why}")));
-        let Some((file, inside)) = self.open_inside(path)? else { return excluded("is outside the project") };
+        if let Some(committed) = self.as_committed(path, path.strip_prefix("./").unwrap_or(path)) {
+            return committed;
+        }
+        let (file, inside) = match self.open_inside(path)? {
+            Opened::File(file, inside) => (file, inside),
+            Opened::Outside => return excluded("is outside the project"),
+            Opened::Missing => return excluded("doesn't lead to a file"),
+        };
         if let Some(listed) = &self.listed
             && listed.binary_search_by(|p| p.as_str().cmp(&inside)).is_err()
         {
             return Ok(Contents::Ignored);
+        }
+        if let Some(committed) = self.as_committed(path, &inside) {
+            return committed;
         }
         let bytes = match load(file, MAX_FILE_BYTES).with_context(|| format!("Couldn't read {path}"))? {
             Loaded::Bytes(bytes) => bytes,
             Loaded::TooLarge => return Ok(Contents::TooLarge),
             Loaded::NotRegular => return excluded("isn't a regular file"),
         };
-        if bytes[..bytes.len().min(BINARY_PREFIX)].contains(&0) {
-            return Ok(Contents::Binary);
-        }
-        Ok(Contents::Text(
-            String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()),
-        ))
+        Ok(text_or_binary(bytes))
     }
 
     /// A file's text, for a file that must be sendable.
@@ -306,7 +351,11 @@ impl Project {
         if fs::symlink_metadata(self.at(path)).is_err() {
             return Ok(None);
         }
-        let Some((file, _)) = self.open_inside(path)? else { bail!("{path} is outside the project") };
+        let file = match self.open_inside(path)? {
+            Opened::File(file, _) => file,
+            Opened::Outside => bail!("{path} is outside the project"),
+            Opened::Missing => bail!("{path} doesn't lead to a file"),
+        };
         config_text(path, file).map(Some)
     }
 }
@@ -324,6 +373,21 @@ fn config_text(path: &str, file: File) -> Result<String> {
         Loaded::TooLarge => bail!("{path} is over {} KB", MAX_CONFIG_BYTES >> 10),
         Loaded::NotRegular => bail!("{path} isn't a regular file"),
     }
+}
+
+fn text_or_binary(bytes: Vec<u8>) -> Contents {
+    if bytes[..bytes.len().min(BINARY_PREFIX)].contains(&0) {
+        return Contents::Binary;
+    }
+    Contents::Text(String::from_utf8(bytes).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()))
+}
+
+/// Where a path leads.
+enum Opened {
+    File(File, String),
+    Outside,
+    /// Nothing, or a link to nothing.
+    Missing,
 }
 
 enum Loaded {
@@ -448,5 +512,30 @@ mod tests {
         std::os::unix::fs::symlink(&secret, dir.path(".judgelint.yml")).unwrap();
         let error = project.read_config(".judgelint.yml").unwrap_err().to_string();
         assert!(error.contains("outside the project") && !error.contains("OUTSIDE"), "{error}");
+    }
+
+    #[test]
+    fn a_pull_request_is_read_as_committed() {
+        let dir = TempDir::new();
+        dir.write("app/a.rb", "committed\n");
+        dir.commit_all();
+        dir.write("app/a.rb", "written over\n");
+        dir.write("app/new.rb", "untracked\n");
+        let pull_request = Project::open(Path::new(&dir.path("")), Holds::Tracked).unwrap();
+        assert_eq!(text(&pull_request, "app/a.rb").as_deref(), Some("committed\n"));
+        assert!(matches!(pull_request.read_to_send("app/new.rb").unwrap(), Contents::Ignored));
+        assert_eq!(text(&dir.project(), "app/a.rb").as_deref(), Some("written over\n"), "the working tree otherwise");
+        assert_eq!(text(&dir.project(), "app/new.rb").as_deref(), Some("untracked\n"));
+    }
+
+    #[test]
+    fn a_path_to_nothing_doesnt_lead_to_a_file() {
+        let dir = TempDir::new();
+        std::os::unix::fs::symlink("missing.rb", dir.path("link.rb")).unwrap();
+        let project = dir.project();
+        for path in ["link.rb", "missing.rb", "no/such/dir.rb"] {
+            let Contents::Excluded(why) = project.read_to_send(path).unwrap() else { panic!("{path}") };
+            assert_eq!(why, format!("{path} doesn't lead to a file"));
+        }
     }
 }

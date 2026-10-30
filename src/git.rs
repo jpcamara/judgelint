@@ -65,3 +65,28 @@ pub fn files(dir: &Path, untracked: bool) -> Result<Option<Vec<String>>> {
     files.dedup();
     Ok(Some(files))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::testing::TempDir;
+
+    #[test]
+    fn lists_a_repositorys_files_and_fails_when_git_does() {
+        let dir = TempDir::new();
+        let root = PathBuf::from(dir.path(""));
+        assert_eq!(files(&root, true).unwrap(), None, "outside a repository");
+        dir.write("a.rb", "x\n");
+        dir.write("ignored.rb", "x\n");
+        dir.write(".gitignore", "ignored.rb\n");
+        dir.commit_all();
+        dir.write("new.rb", "x\n");
+        assert_eq!(files(&root, true).unwrap().unwrap(), [".gitignore", "a.rb", "new.rb"]);
+        assert_eq!(files(&root, false).unwrap().unwrap(), [".gitignore", "a.rb"], "tracked only");
+        std::fs::write(dir.path(".git/index"), "not an index").unwrap();
+        let error = files(&root, true).unwrap_err().to_string();
+        assert!(error.contains("git couldn't list the project's files"), "{error}");
+    }
+}
