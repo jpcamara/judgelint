@@ -228,7 +228,7 @@ impl Endpoint {
         // the entry gives one, and its cost shows as unknown.
         // A server on this machine costs nothing.
         let local = settings.api_base.as_deref().or_else(|| preset.and_then(|p| p.api_base.as_deref()));
-        let local = local.is_some_and(|base| !base.contains("${") && is_local(base));
+        let local = local.is_some_and(|base| expand(base).is_ok_and(|base| is_local(&base)));
         let price_per_million = settings
             .price_per_million
             .or_else(|| preset.and_then(|p| p.prices.get(model.as_deref().unwrap_or("")).copied()))

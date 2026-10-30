@@ -237,8 +237,10 @@ pub enum Contents {
     Text(String),
     TooLarge,
     Binary,
-    /// A file judgelint won't send, and why: outside the project, ignored
-    /// by git, or not a regular file.
+    /// Ignored by git.
+    Ignored,
+    /// A file judgelint won't send, and why: outside the project, or not a
+    /// regular file.
     Excluded(String),
 }
 
@@ -304,7 +306,7 @@ pub fn read_to_send(path: &str) -> Result<Contents> {
     if let Some(listed) = project_files().filter(|_| !cfg!(test))
         && listed.binary_search_by(|p| p.as_str().cmp(&inside)).is_err()
     {
-        return excluded("is ignored by git");
+        return Ok(Contents::Ignored);
     }
     let metadata = file.metadata()?;
     if !metadata.is_file() {
@@ -330,6 +332,7 @@ pub fn read_text(path: &str) -> Result<String> {
         Contents::Text(text) => Ok(text),
         Contents::TooLarge => bail!("{path} is over {} MB", MAX_FILE_BYTES >> 20),
         Contents::Binary => bail!("{path} is binary"),
+        Contents::Ignored => bail!("{path} is ignored by git"),
         Contents::Excluded(why) => bail!("{why}"),
     }
 }

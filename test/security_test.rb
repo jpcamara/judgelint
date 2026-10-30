@@ -160,6 +160,46 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_directory_with_a_link_out_of_the_project_is_skipped
+    Dir.mktmpdir("judgelint-outside") do |outside|
+      File.write(File.join(outside, "linked.rb"), "OUTSIDE\n")
+      in_project do
+        write(".judgelint/rules/cohesive.md", "---\nquestion: Do these files fail to hang together?\nscope: directory\n" \
+                                              "paths: [\"app/features/*\"]\n---\nOne capability per feature.\n")
+        write("app/features/a/index.rb", "fine\n")
+        git_repo
+        File.symlink(File.join(outside, "linked.rb"), "app/features/a/linked.rb")
+        status, out, err = judgelint("--base", "main")
+
+        assert_equal 1, status, err
+        assert_match(/skipped/, out)
+        assert_empty @server.requests
+      end
+    end
+  end
+
+  def test_a_file_gitattributes_marks_binary_is_still_checked_when_changed
+    in_smelly_project do
+      write(".gitattributes", "*.rb -diff\n")
+      git_repo
+      write("app/good.rb", "SMELL\n")
+      status, out, = judgelint("--base", "main")
+
+      assert_equal 1, status
+      assert_match(/^1 file, 1 violations$/, out)
+    end
+  end
+
+  def test_a_local_server_named_through_a_variable_costs_nothing
+    in_smelly_project do
+      port = @server.base[/\d+\z/]
+      model = { "provider" => "custom", "model" => "m", "api_base" => "http://127.0.0.1:${JUDGELINT_PORT}", "auth" => "none" }
+      status, _out, err = judgelint("app/bad.rb", model: model, env: { "JUDGELINT_PORT" => port })
+
+      assert_equal 1, status, err
+    end
+  end
+
   def test_a_change_too_large_to_judge_fails_the_check
     in_smelly_project do
       git_repo

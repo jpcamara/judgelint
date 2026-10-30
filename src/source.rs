@@ -28,8 +28,9 @@ pub struct Source {
     pub line_count: u32,
     /// The lines with a judgehint.
     pub hints: Vec<u32>,
-    /// A directory with a file too large to send, which can't be judged.
-    pub too_large: bool,
+    /// A directory with a file judgelint won't send, too large or leading
+    /// outside the project, which can't be judged.
+    pub unjudgeable: bool,
 }
 
 impl Source {
@@ -42,24 +43,24 @@ impl Source {
             context,
             line_count: 0,
             hints: Vec::new(),
-            too_large: false,
+            unjudgeable: false,
         }
     }
 
-    /// A directory and its files, except those judgelint won't send: ignored,
-    /// binary, or leading outside the project. One too large to send leaves
-    /// the directory too large to judge.
+    /// A directory and its files, except the ignored and binary ones. One
+    /// judgelint won't send, too large or leading outside the project, leaves
+    /// the directory unjudgeable.
     pub fn directory(dir: &str, shown_as: Option<&str>, context: Arc<Vec<String>>) -> Result<Source> {
-        let mut too_large = false;
+        let mut unjudgeable = false;
         let mut files = Vec::new();
         for file in glob::expand(&[format!("{dir}/**/*")])? {
             match glob::read_to_send(&file)? {
                 glob::Contents::Text(_) => files.push(file),
-                glob::Contents::TooLarge => too_large = true,
-                glob::Contents::Binary | glob::Contents::Excluded(_) => {}
+                glob::Contents::Binary | glob::Contents::Ignored => {}
+                glob::Contents::TooLarge | glob::Contents::Excluded(_) => unjudgeable = true,
             }
         }
-        Ok(Source { files: Some(files), too_large, ..Source::file(dir, shown_as, context, None) })
+        Ok(Source { files: Some(files), unjudgeable, ..Source::file(dir, shown_as, context, None) })
     }
 
     pub fn is_directory(&self) -> bool {
