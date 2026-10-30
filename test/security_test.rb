@@ -444,6 +444,29 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_file_name_cant_forge_a_line_of_output
+    in_smelly_project do
+      write("app/a\n::error file=app/good.rb::forged.rb", "SMELL\n")
+      status, out, err = judgelint
+
+      assert_equal 1, status, err
+      assert_includes out, "app/a\\n::error"
+      refute_match(/^::error/, out)
+    end
+  end
+
+  def test_an_endpoints_error_cant_forge_a_line_of_output
+    @server.stop
+    @server = StubSystemOne.new(status: 400, body: JSON.generate({ "detail" => "bad\n::error::forged\e[31m" }))
+    in_smelly_project do
+      status, _out, err = judgelint("app/bad.rb")
+
+      assert_equal 2, status
+      assert_includes err, "bad\\n::error::forged\\u{1b}[31m"
+      refute_match(/^::error/, err)
+    end
+  end
+
   def test_redirects_arent_followed
     elsewhere = StubSystemOne.new
     @server.stop

@@ -203,7 +203,7 @@ impl<'a> Reporter<'a> {
                     self.paint.call("MISS", paint::BOLD_RED)
                 };
                 let expected = self.cell(example.expected.map_or("", |e| e.name()), 4, paint::DIM);
-                let path = self.paint.call(&example.path, paint::CYAN);
+                let path = self.paint.call(&paint::clean(&example.path), paint::CYAN);
                 writeln!(self.out, "  {mark} {expected} {}  {path}", probability(example))?;
             }
         }
@@ -220,7 +220,7 @@ impl<'a> Reporter<'a> {
         let width = shown.iter().map(|v| chars(&self.rules[v.rule].id)).max().unwrap_or(0);
         let places = shown.iter().map(|v| chars(&range(v))).fold(7, usize::max);
         for (path, group) in group_by(&shown, |v| v.path.clone()) {
-            writeln!(self.out, "{}", self.paint.call(&path, paint::BOLD))?;
+            writeln!(self.out, "{}", self.paint.call(&paint::clean(&path), paint::BOLD))?;
             for verdict in group {
                 let line = self.line(verdict, width, places);
                 writeln!(self.out, "  {line}")?;
@@ -249,7 +249,7 @@ impl<'a> Reporter<'a> {
             self.cell(&rule.id, width, paint::DIM),
             format!(" {}", self.cell(&range(verdict), places, paint::CYAN)),
             format!("{} ", self.paint.call(&probability(verdict), tone)),
-            rule.message.clone(),
+            paint::clean(&rule.message).into_owned(),
         ]
         .join(" ")
     }
@@ -366,7 +366,7 @@ impl<'a> Reporter<'a> {
 /// directory, the file in it.
 fn range(verdict: &Verdict) -> String {
     if let Some(file) = &verdict.file {
-        return file.strip_prefix(&format!("{}/", verdict.path)).unwrap_or(file).to_string();
+        return paint::clean(file.strip_prefix(&format!("{}/", verdict.path)).unwrap_or(file)).into_owned();
     }
     match (verdict.line, verdict.lines) {
         (Some(line), _) => line.to_string(),

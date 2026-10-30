@@ -125,7 +125,7 @@ pub fn main() -> i32 {
     };
     let status = result.unwrap_or_else(|e| {
         let _ = app.out.flush();
-        eprintln!("{} {e:#}", app.err_paint.call("judgelint:", paint::BOLD_RED));
+        eprintln!("{} {}", app.err_paint.call("judgelint:", paint::BOLD_RED), paint::clean(&format!("{e:#}")));
         // Requests that succeeded before the failure are still billed.
         if app.usage.as_ref().is_some_and(|u| u.requests() > 0) {
             app.cost_line();
@@ -185,11 +185,11 @@ impl App {
                 Contents::Binary if changes.is_none() || project::binary_format(path) => return Ok(None),
                 Contents::Ignored if changes.is_none() => return Ok(None),
                 Contents::Excluded(why) if changes.is_none() => {
-                    eprintln!("judgelint: left out {why}");
+                    eprintln!("judgelint: left out {}", paint::clean(&why));
                     return Ok(None);
                 }
                 unsendable => {
-                    eprintln!("judgelint: skipped {}", unsendable.why(path));
+                    eprintln!("judgelint: skipped {}", paint::clean(&unsendable.why(path)));
                     return runner.skip_file(path).map(Some);
                 }
             };
