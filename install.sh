@@ -5,6 +5,12 @@
 #
 # JUDGELINT_VERSION=v0.1.0 installs that release instead of the latest, and
 # JUDGELINT_INSTALL_DIR picks where it goes (default ~/.local/bin).
+#
+# This script checks each download against the release's SHA256SUMS. Releases
+# after v0.2.0 also carry build provenance. To check that a download was built
+# by this repo's release workflow from the tagged source, use the GitHub CLI:
+#
+#   gh attestation verify judgelint-aarch64-apple-darwin.tar.gz --repo jpcamara/judgelint
 set -eu
 
 repo="jpcamara/judgelint"
