@@ -18,8 +18,9 @@ The script installs to `~/.local/bin`, or to `$JUDGELINT_INSTALL_DIR`. The
 binaries are on the [releases page](https://github.com/jpcamara/judgelint/releases)
 for macOS and Linux, on arm64 and x86_64. Linux needs glibc 2.34 or newer
 (Ubuntu 22.04, Debian 12, RHEL 9). `gem install judgelint` installs the same
-binary. Anywhere else, build it with Rust:
-`cargo install --git https://github.com/jpcamara/judgelint`.
+binary. On another Unix, or an older glibc, build it with Rust:
+`cargo install --git https://github.com/jpcamara/judgelint`. It doesn't build
+on Windows.
 
 Each release's archives and gems carry a build attestation from the GitHub
 Actions run that built them, from the tagged source. To check one:
@@ -232,26 +233,35 @@ judgelint --pr                   # changes in the current pull request
 judgelint --pr --format github   # GitHub annotations on the changed lines (json and sarif work too)
 ```
 
-These only ask about the lines that changed, with the rest of the file as
-context, so existing code doesn't block a new pull request: a finding the
-model places on a line the change didn't touch doesn't count. A new file is
+These ask only about the lines that changed, with the rest of the file as
+context, so existing code doesn't block a new pull request. A new file is
 all changed lines. Rules about a whole file (`scope: file`) still read the
-whole file when any of it changed. `--pr` gets the base branch from GitHub
+whole file when any of it changed, and a directory rule asks about a
+directory when a file in it was changed, added or deleted. Only `check`
+takes `--base` and `--pr`. `--pr` gets the base branch from GitHub
 Actions, GitLab, Buildkite, Bitbucket, Azure Pipelines,
 `JUDGELINT_BASE_BRANCH`, or `gh`. Fetch enough history for git to find the
 merge base.
 
 Under `--base` or `--pr`, a changed file judgelint can't judge fails the
-run: one too large for the model, or one the model refused to answer about.
+run: one too large for the model, one the model refused to answer about,
+even in part, one that leads outside the project, or a binary one. Images,
+fonts, archives and other formats that are never code are left out instead.
 
 ### Pull requests from people you don't trust
 
 `--pr` reads `.judgelint.yml`, the specs, and `.judgelint/cache.bin` from the
 base branch, not from the pull request, so a pull request can't change the
 rules it's checked against, where its code is sent, or the answers it's
-judged by. New or changed conventions apply once they're merged. Run
-judgelint with `--pr` on pull requests; a plain `judgelint` or `--base` run
-uses the checked-out files as they are.
+judged by. New or changed conventions apply once they're merged. The base
+branch's cache is read into memory, and the checkout's own is left alone.
+
+`--pr` judges what the pull request committed. Anything else in the
+checkout, like a file an earlier CI step wrote, is never sent, whatever the
+pull request's `.gitignore` says.
+
+Run judgelint with `--pr` on pull requests; a plain `judgelint` or `--base`
+run uses the checked-out files as they are.
 
 `--pr` trusts the branch a pull request targets, so only check pull requests
 against branches that only trusted people push to.
@@ -270,8 +280,9 @@ your machine is read or sent:
 - Only files inside the directory judgelint runs in, and none reached
   through a link that leads out of it.
 - In a git repository, only files git tracks or would add, never ignored
-  ones.
-- No binary files, and nothing over 4 MB.
+  ones. Under `--pr`, only files git tracks.
+- No binary files, and nothing over 4 MB, or 4 MB for a directory's files
+  together.
 
 Requests go to the model's API over https, or plain http to a server on
 your own machine. The API key goes only to its own provider's address: a
@@ -294,6 +305,7 @@ A model judgelint has no price for, like any model on OpenRouter, needs a
 
 Every run prints what it cost. Answers are cached in `.judgelint/cache.bin`,
 so a file that hasn't changed costs nothing. Commit the cache to share it.
+Runs at the same time can share it too.
 `judgelint --help` lists the flags.
 
 List two models to average their answers, like `models: [typesafe,

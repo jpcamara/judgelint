@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.2.2 (unreleased)
+
+Fixes from a third review of 0.2.1, which found ways around its fixes.
+
+- `--pr` judges what the pull request committed. Uncommitted edits and
+  untracked files, like ones an earlier CI step wrote, aren't part of it
+  and are never sent, whatever the pull request's `.gitignore` says.
+- `--pr` reads the base branch's cache into memory and leaves the
+  checkout's `.judgelint/cache.bin` alone.
+- `--base` and `--pr` work with `check` only. `judgelint test --pr` used to
+  run, ignore `--pr`, and use the pull request's config.
+- Under `--base` or `--pr`, these now fail the run instead of passing:
+  - a changed file with a NUL byte near its start, which counted as binary
+    and was left out (images, fonts, archives and other formats that are
+    never code are still left out);
+  - a rule the model refused to answer for one window when another passed;
+  - a changed file that leads outside the project.
+- Deleting or moving a file asks about its directory's directory rules.
+- An empty file is asked about by rules about whole files and directories.
+- The "where" answer no longer scales a change's verdict down. A new
+  violation next to an older, clearer one used to pass. The verdict
+  question still names only the changed lines.
+- If git fails to list the project's files, that's an error. Before, the
+  gitignore check was skipped and ignored files could be sent.
+- The project's `.judgelint.yml` must be a regular file inside the project,
+  1 MB at most. A config named with `--config` can be anywhere.
+- Files are opened with no links allowed in the path, so a directory
+  swapped for a link while judgelint runs can't lead it outside.
+- Runs that share a cache no longer drop each other's answers.
+- A custom endpoint's answers are cached under the address its `${VAR}`s
+  resolve to and its headers. Custom endpoints, and presets with headers,
+  ask again once.
+- A failed request stops the run instead of every file retrying it.
+  Requests go out 32 at a time across files. Responses are capped at 4 MB.
+- A file too large for every model is skipped before its questions are
+  made, and a directory's files are capped at 4 MB together.
+- Control characters in file names and endpoint errors are escaped in
+  output, so they can't forge a CI annotation.
+- A header whose `${VAR}` isn't set is an error; it was sent as written.
+  The key's header is marked sensitive. `price_per_million` can't be
+  negative. Cached choices must add up to one. YAML is parsed with
+  explicit limits.
+- CI runs cargo-deny and zizmor, builds with the oldest supported Rust,
+  and builds the binaries with cargo-auditable. Dependabot updates the
+  actions and crates. install.sh checks the build attestation when the
+  GitHub CLI is signed in.
+
 ## 0.2.1 (2026-10-29)
 
 Security fixes, after two reviews of 0.2.0. A pull request could change the
