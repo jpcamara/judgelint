@@ -1,6 +1,5 @@
 /target/
 /pkg/
-/Gemfile.lock
 /.bundle/
 /vendor/
 /libexec/
