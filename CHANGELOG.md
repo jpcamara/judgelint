@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.3 (unreleased)
+
+Hardening from a fourth review.
+
+- A `##` in a file name or an endpoint's error is escaped in text output,
+  so it can't run an Azure Pipelines (`##vso[`) or TeamCity command. JSON
+  and SARIF write it as `#\u0023`, which reads back the same.
+- Under `--base` or `--pr`, adding or changing a link to a directory asks
+  that directory's directory rules.
+- A directory with `[`, `*`, `?` or `{` in its name sends its own files to
+  directory rules. Its name was read as a pattern, which could match
+  nothing.
+- A changed file whose name isn't UTF-8 fails the run. It was read as
+  whatever file its name decoded to.
+- `judgelint init` won't write through a `CONVENTIONS.md` link.
+- `--pr` warns when the pull request changes `.judgelint/cache.bin`. The
+  run doesn't use it, but once it's merged its answers decide later checks.
+- The README says that patterns skip names that start with a dot unless
+  they name the dot.
+
 ## 0.2.2 (2026-10-30)
 
 Fixes from a third review of 0.2.1, which found ways around its fixes.

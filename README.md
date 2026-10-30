@@ -55,7 +55,9 @@ judgelint: 1 request, 940 input tokens, $0.0000, typesafe:jev-latest
 ```
 
 That's all the setup there is. A `CONVENTIONS.md` covers the files in its
-directory and below, except Markdown and lockfiles. In a git repository,
+directory and below, except Markdown, lockfiles, and names that start with a
+dot. A pattern in `paths:` matches a dotted name only when it names the dot,
+like `.github/*.yml`. In a git repository,
 judgelint skips what git ignores. It also skips binary files.
 
 judgelint asks Jev on TypeSafe. To use another provider, set `models` in
@@ -258,6 +260,11 @@ base branch, not from the pull request, so a pull request can't change the
 rules it's checked against, where its code is sent, or the answers it's
 judged by. New or changed conventions apply once they're merged. The base
 branch's cache is read into memory, and the checkout's own is left alone.
+
+A cache a pull request commits is used once it's merged, too, and nobody
+can review the answers in it. judgelint warns when a pull request changes
+it. Don't merge one from someone you don't trust; run judgelint on the base
+branch to update it.
 
 `--pr` judges what the pull request committed. Anything else in the
 checkout, like a file an earlier CI step wrote, is never sent, whatever the
