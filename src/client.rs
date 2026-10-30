@@ -23,6 +23,7 @@ pub struct Client {
     usage: Arc<Usage>,
     agent: ureq::Agent,
     url: OnceLock<String>,
+    cache_label: OnceLock<String>,
     /// The payload's length without the state or questions, and whether the
     /// state is in it (provider_options can replace it).
     base: (usize, bool),
@@ -59,7 +60,7 @@ impl Client {
             .user_agent("judgelint")
             .build()
             .into();
-        Ok(Client { endpoint, usage, agent, url: OnceLock::new(), base })
+        Ok(Client { endpoint, usage, agent, url: OnceLock::new(), cache_label: OnceLock::new(), base })
     }
 
     pub fn protocol(&self) -> Protocol {
@@ -91,6 +92,21 @@ impl Client {
         let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
         refuse_plain_http(&url, &self.shown_url())?;
         Ok(self.url.get_or_init(|| url))
+    }
+
+    /// What the model's answers are cached under. Asked any way but the
+    /// preset's, that includes the address ${VAR}s resolve to, so a variable
+    /// pointing somewhere else asks again.
+    pub fn cache_label(&self) -> Result<&str> {
+        if let Some(label) = self.cache_label.get() {
+            return Ok(label);
+        }
+        let label = if self.endpoint.as_preset {
+            self.endpoint.cache_label.clone()
+        } else {
+            format!("{} {}", self.endpoint.cache_label, self.url()?)
+        };
+        Ok(self.cache_label.get_or_init(|| label))
     }
 
     /// The URL as configured, before ${VAR} is filled in, so errors don't

@@ -7,7 +7,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rayon::prelude::*;
 
@@ -157,10 +157,7 @@ impl App {
             (Some(base), true) => Some(Commit::new(base)?),
             _ => None,
         };
-        if let Some(commit) = trusted.as_ref().filter(|_| !self.options.no_cache) {
-            use_cache_from(commit)?;
-        }
-        let loading = self.load_cache_early();
+        let loading = self.load_cache_early(trusted.as_ref());
         // A pull request is its commits: what else is in the checkout, like
         // files an earlier step wrote, isn't part of it, whatever its
         // .gitignore says.
@@ -243,7 +240,7 @@ impl App {
     }
 
     fn test(&mut self, ids: Vec<String>) -> Result<i32> {
-        let loading = self.load_cache_early();
+        let loading = self.load_cache_early(None);
         let project = Project::open(Path::new("."), Holds::WorkingTree)?;
         let (config, mut rules) = self.load_rules(&project, None)?;
         if !ids.is_empty() {
@@ -359,9 +356,18 @@ impl App {
     }
 
     /// Starts reading the cache's index while the files are found and read.
-    fn load_cache_early(&self) -> Option<JoinHandle<Result<Cache>>> {
-        let wanted = !self.options.no_cache && std::path::Path::new(config::CACHE).is_file();
-        wanted.then(|| std::thread::spawn(|| Cache::open(Some(config::CACHE))))
+    /// With a commit, the cache is the commit's, kept in memory: answers a
+    /// pull request brings along could say anything, and the checkout's own
+    /// cache is left as it is.
+    fn load_cache_early(&self, commit: Option<&Commit>) -> Option<JoinHandle<Result<Cache>>> {
+        if self.options.no_cache {
+            return None;
+        }
+        if let Some(commit) = commit {
+            let commit = commit.clone();
+            return Some(std::thread::spawn(move || Cache::in_memory(commit.read(config::CACHE)?.unwrap_or_default())));
+        }
+        Path::new(config::CACHE).is_file().then(|| std::thread::spawn(|| Cache::open(Some(config::CACHE))))
     }
 
     fn runner_parts(
@@ -380,31 +386,6 @@ impl App {
         };
         Ok((clients, cache))
     }
-}
-
-/// Puts the commit's cache in place of the working tree's, or none when it
-/// has none: answers a pull request brings along could say anything.
-fn use_cache_from(commit: &Commit) -> Result<()> {
-    let path = std::path::Path::new(config::CACHE);
-    let dir = path.parent().unwrap_or(std::path::Path::new("."));
-    if dir.symlink_metadata().is_ok_and(|m| !m.is_dir()) {
-        bail!("{} isn't a directory; judgelint keeps its cache in one", dir.display());
-    }
-    let replace = || -> std::io::Result<()> {
-        match commit.read(config::CACHE).map_err(std::io::Error::other)? {
-            Some(bytes) => {
-                std::fs::create_dir_all(dir)?;
-                let temporary = format!("{}.{}.tmp", config::CACHE, std::process::id());
-                let _ = std::fs::remove_file(&temporary);
-                std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?.write_all(&bytes)?;
-                // A rename replaces a link itself, never what it points to.
-                std::fs::rename(&temporary, path)
-            }
-            None if path.symlink_metadata().is_ok() => std::fs::remove_file(path),
-            None => Ok(()),
-        }
-    };
-    replace().with_context(|| format!("Couldn't put {}'s {} in place", commit.reference, config::CACHE))
 }
 
 /// The files to check, before the ignored and binary ones are left out.

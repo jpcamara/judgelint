@@ -200,9 +200,12 @@ pub struct Endpoint {
     pub max_state_tokens: usize,
     pub max_request_tokens: usize,
     pub needs: Option<String>,
-    /// What its answers are cached under: the provider and model, plus where
-    /// and how it's asked when that isn't the preset's way.
+    /// What its answers are cached under: the provider and model, plus how
+    /// it's asked when that isn't the preset's way, in which case the
+    /// client adds the address it resolves to.
     pub cache_label: String,
+    /// Asked the preset's way, at the preset's address.
+    pub as_preset: bool,
 }
 
 impl Endpoint {
@@ -245,6 +248,7 @@ impl Endpoint {
             && settings.path.is_none()
             && settings.protocol.is_none()
             && settings.provider_options.is_empty()
+            && settings.headers.is_empty()
             && preset.is_some();
         let api_key_env = settings.api_key_env.or_else(|| if moved { None } else { from_preset(|p| &p.api_key_env) });
         let api_base = settings.api_base.or_else(|| from_preset(|p| &p.api_base));
@@ -255,7 +259,7 @@ impl Endpoint {
             own_label
         } else {
             let options = Value::Object(settings.provider_options.clone());
-            format!("{own_label} {} {path} {protocol:?} {options}", api_base.as_deref().unwrap_or(""))
+            format!("{own_label} {path} {protocol:?} {options} {:?}", settings.headers)
         };
         if !(["bearer", "basic", "none"].contains(&auth.as_str()) || auth.starts_with("header:")) {
             bail!("auth is bearer, basic, none, or header:<name>, not {auth}");
@@ -267,6 +271,7 @@ impl Endpoint {
             auth,
             api_key_env,
             cache_label,
+            as_preset,
             headers: settings.headers,
             provider_options: settings.provider_options,
             price_per_million,

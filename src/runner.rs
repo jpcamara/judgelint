@@ -432,7 +432,7 @@ impl<'a> Runner<'a> {
     pub fn pack_all(&self, jobs: &mut [Job], clients: &[Client], cache: &Cache) -> Result<()> {
         // Each model's answers are cached on their own, so adding a model asks
         // only the new one.
-        let labels: Vec<String> = clients.iter().map(|c| c.endpoint.cache_label.clone()).collect();
+        let labels: Vec<&str> = clients.iter().map(Client::cache_label).collect::<Result<_>>()?;
         jobs.par_iter_mut().try_for_each(|job| {
             self.pack(job, clients, &labels, cache)?;
             if job.requests.is_empty() {
@@ -446,7 +446,7 @@ impl<'a> Runner<'a> {
     /// For each model, packs the questions the cache can't answer into as
     /// few requests as fit its limits. A file whose state and widest question
     /// are over a model's limit is skipped: it's reported, never sent.
-    fn pack(&self, job: &mut Job, clients: &[Client], labels: &[String], cache: &Cache) -> Result<()> {
+    fn pack(&self, job: &mut Job, clients: &[Client], labels: &[&str], cache: &Cache) -> Result<()> {
         if job.skipped {
             return Ok(());
         }
@@ -456,7 +456,7 @@ impl<'a> Runner<'a> {
             let mut answers: Vec<Option<Answer>> = Vec::new();
             let mut pending: Vec<u32> = Vec::new();
             for (i, question) in questions.flat.iter().enumerate() {
-                let key = cache::key(&question.digest, &state, &labels[model]);
+                let key = cache::key(&question.digest, &state, labels[model]);
                 match cache.get(&key)?.and_then(|values| Answer::from_cached(question, values)) {
                     None => pending.push(i as u32),
                     Some(answer) => {
@@ -586,7 +586,7 @@ impl<'a> Runner<'a> {
         job.answers.resize_with(clients.len(), Vec::new);
         for (request, answers) in job.requests.iter().zip(results) {
             let model = request.model;
-            let label = &clients[model].endpoint.cache_label;
+            let label = clients[model].cache_label()?;
             let kept = &mut job.answers[model];
             kept.resize_with(questions.flat.len(), || None);
             for (&i, answer) in request.questions.iter().zip(answers?) {

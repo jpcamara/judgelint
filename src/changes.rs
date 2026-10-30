@@ -189,6 +189,7 @@ fn check_ref(reference: &str) -> Result<()> {
 /// A commit's files, read from git rather than the working tree: the base
 /// branch a pull request is checked against, whose rules, config and cache
 /// the pull request can't change.
+#[derive(Clone)]
 pub struct Commit {
     pub reference: String,
     /// Regular files under the working directory, as paths relative to it, sorted.

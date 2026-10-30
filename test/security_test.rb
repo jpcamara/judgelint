@@ -135,6 +135,7 @@ class SecurityTest < Minitest::Test
       assert_empty attacker.requests, "the pull request's config isn't used"
       assert_equal ["Bearer secret"], @server.requests.map { |r| r[:authorization] }
       refute_includes @server.requests.first[:payload].to_s, "Context", "nor its rules"
+      assert_equal "jlcache1", File.read(".judgelint/cache.bin"), "and the checkout's cache is left alone"
     end
   ensure
     attacker&.stop
@@ -175,7 +176,7 @@ class SecurityTest < Minitest::Test
     end
   end
 
-  def test_pr_wont_write_the_cache_through_a_linked_directory
+  def test_pr_leaves_the_checkouts_cache_alone
     Dir.mktmpdir("judgelint-outside") do |outside|
       File.write(File.join(outside, "cache.bin"), "keep me")
       in_smelly_project do |dir|
@@ -188,8 +189,7 @@ class SecurityTest < Minitest::Test
         File.symlink(outside, ".judgelint")
         _out, err, status = Open3.capture3({ "GITHUB_BASE_REF" => "main" }, BINARY, "--pr")
 
-        assert_equal 2, status.exitstatus
-        assert_match(/isn't a directory/, err)
+        assert_equal 0, status.exitstatus, err
         assert_equal "keep me", File.read(File.join(outside, "cache.bin"))
       end
     end
@@ -380,6 +380,22 @@ class SecurityTest < Minitest::Test
       assert_equal [%w[smell.1-40 smell.41-60]], @server.requests.map { |r| r[:payload]["questions"].keys.sort },
                    "line 55 is still asked about"
     end
+  end
+
+  def test_a_variable_pointing_elsewhere_asks_again
+    other = StubSystemOne.new
+    in_smelly_project do
+      model = { "provider" => "custom", "model" => "m", "api_base" => "http://127.0.0.1:${JUDGELINT_PORT}", "auth" => "none" }
+      [@server, other].each do |server|
+        status, _out, err = judgelint("app/bad.rb", model: model, env: { "JUDGELINT_PORT" => server.base[/\d+\z/] },
+                                                    cache: true)
+        assert_equal 1, status, err
+      end
+
+      assert_equal [1, 1], [@server.requests.size, other.requests.size]
+    end
+  ensure
+    other&.stop
   end
 
   def test_a_model_without_a_price_needs_yes
