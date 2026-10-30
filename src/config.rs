@@ -27,8 +27,6 @@ pub const FILE: &str = ".judgelint.yml";
 pub const RULES_DIR: &str = ".judgelint/rules";
 pub const CACHE: &str = ".judgelint/cache.bin";
 pub const WINDOW_LINES: u32 = 40;
-/// Files sent at once.
-pub const THREADS: usize = 8;
 pub const TIMEOUT: u64 = 30;
 pub const RETRIES: u32 = 3;
 /// Answers this far below the threshold, or less, are uncertain: reported, never failing.

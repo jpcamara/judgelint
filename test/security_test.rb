@@ -408,6 +408,31 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_failing_endpoint_stops_the_run
+    @server.stop
+    @server = StubSystemOne.new(status: 400, body: "{}")
+    in_project do
+      write_rule("smell")
+      300.times { |i| write("app/f#{i}.rb", "fine #{i}\n") }
+      status, _out, err = judgelint
+
+      assert_equal 2, status, err
+      assert_operator @server.requests.size, :<, 300
+    end
+  end
+
+  def test_a_file_of_short_lines_is_skipped_before_its_questions_are_made
+    in_project do
+      write_rule("smell")
+      write("app/lines.rb", "\n" * 3_000_000)
+      status, out, err = judgelint
+
+      assert_equal 0, status, err
+      assert_match(/1 skipped/, out)
+      assert_empty @server.requests
+    end
+  end
+
   def test_a_retry_after_that_isnt_a_number_is_ignored
     @server.stop
     @server = StubSystemOne.new(responses: [[429, "{}", { "Retry-After" => "NaN" }], [200, nil]])

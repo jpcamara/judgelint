@@ -16,7 +16,7 @@ use crate::usage::Usage;
 
 const RETRY_STATUSES: [u16; 7] = [408, 429, 500, 502, 503, 504, 529];
 /// Answers are a few kilobytes; anything near this is something else.
-const MAX_RESPONSE_BYTES: u64 = 16 << 20;
+const MAX_RESPONSE_BYTES: u64 = 4 << 20;
 
 pub struct Client {
     pub endpoint: Endpoint,

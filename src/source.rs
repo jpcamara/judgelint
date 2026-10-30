@@ -13,7 +13,7 @@ use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::project::{self, Contents, Project};
+use crate::project::{self, Contents, MAX_FILE_BYTES, Project};
 
 static HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:#|//|--|/\*|<!--|;)\s*judgehint:").unwrap());
 
@@ -49,8 +49,9 @@ impl Source {
 
     /// A directory and its files, except the ignored and binary ones. One
     /// judgelint won't send, too large or leading outside the project, leaves
-    /// the directory unjudgeable, and so does a binary one when a change is
-    /// being checked, unless it's in a format that's never code.
+    /// the directory unjudgeable, with no files, and so does a binary one
+    /// when a change is being checked, unless it's in a format that's never
+    /// code. So do files that add up to more than one file can be.
     pub fn directory(
         project: &Project,
         dir: &str,
@@ -58,17 +59,23 @@ impl Source {
         context: Arc<Vec<String>>,
         changed: bool,
     ) -> Result<Source> {
-        let mut unjudgeable = false;
         let mut files = Vec::new();
+        let mut total = 0;
         for file in project.expand(&[format!("{dir}/**/*")])? {
             match project.read_to_send(&file)? {
-                Contents::Text(_) => files.push(file),
-                Contents::Binary if changed && !project::binary_format(&file) => unjudgeable = true,
-                Contents::Binary | Contents::Ignored => {}
-                Contents::TooLarge | Contents::Excluded(_) => unjudgeable = true,
+                Contents::Text(text) if total + text.len() as u64 <= MAX_FILE_BYTES => {
+                    total += text.len() as u64;
+                    files.push(file);
+                }
+                Contents::Binary if !changed || project::binary_format(&file) => {}
+                Contents::Ignored => {}
+                _ => {
+                    let source = Source::file(dir, shown_as, context, None);
+                    return Ok(Source { files: Some(Vec::new()), unjudgeable: true, ..source });
+                }
             }
         }
-        Ok(Source { files: Some(files), unjudgeable, ..Source::file(dir, shown_as, context, None) })
+        Ok(Source { files: Some(files), ..Source::file(dir, shown_as, context, None) })
     }
 
     pub fn is_directory(&self) -> bool {
