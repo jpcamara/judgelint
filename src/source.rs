@@ -13,7 +13,6 @@ use anyhow::Result;
 use regex::Regex;
 use serde_json::{Value, json};
 
-use crate::config;
 use crate::glob;
 
 static HINT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?:#|//|--|/\*|<!--|;)\s*judgehint:").unwrap());
@@ -44,9 +43,11 @@ impl Source {
         }
     }
 
-    /// A directory and all its files.
+    /// A directory and its files, except those judgelint won't send: ignored,
+    /// binary, too large, or leading outside the project.
     pub fn directory(dir: &str, shown_as: Option<&str>, context: Arc<Vec<String>>) -> Result<Source> {
-        let files = glob::expand(&[format!("{dir}/**/*")])?;
+        let mut files = glob::expand(&[format!("{dir}/**/*")])?;
+        files.retain(|f| matches!(glob::read_to_send(f), Ok(glob::Contents::Text(_))));
         Ok(Source { files: Some(files), ..Source::file(dir, shown_as, context, None) })
     }
 
@@ -79,7 +80,7 @@ impl Source {
         if let Some(text) = &self.text {
             return Ok(vec![text.to_string()]);
         }
-        self.file_list().into_iter().map(config::read).collect()
+        self.file_list().into_iter().map(glob::read_text).collect()
     }
 
     /// The state: the numbered text the model is shown, or {team_rules, file}
@@ -105,7 +106,7 @@ impl Source {
                 if i > 0 {
                     text.push('\n');
                 }
-                let _ = write!(text, "Path: {file}\n\n{}", config::read(file)?);
+                let _ = write!(text, "Path: {file}\n\n{}", glob::read_text(file)?);
             }
         }
         Ok(match prose {

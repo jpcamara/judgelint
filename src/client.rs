@@ -15,6 +15,8 @@ use crate::question::Question;
 use crate::usage::Usage;
 
 const RETRY_STATUSES: [u16; 7] = [408, 429, 500, 502, 503, 504, 529];
+/// Answers are a few kilobytes; anything near this is something else.
+const MAX_RESPONSE_BYTES: u64 = 16 << 20;
 
 pub struct Client {
     pub endpoint: Endpoint,
@@ -36,13 +38,19 @@ impl Client {
         if endpoint.model.as_deref().unwrap_or("").is_empty() && provider != "llamacpp" {
             bail!("Provider {provider} needs a model in .judgelint.yml");
         }
+        if let Some(base) = endpoint.api_base.as_deref().filter(|b| !b.contains("${")) {
+            refuse_plain_http(base, base)?;
+        }
         let protocol = endpoint.protocol;
         let empty =
             protocol.payload(endpoint.model.as_deref(), &[], Value::String(String::new()), &endpoint.provider_options);
         let has_state = !endpoint.provider_options.contains_key(protocol.state_key());
         let base = (empty.to_string().len() - if has_state { 2 } else { 0 }, has_state);
+        // No redirects: a hop to another host would carry a custom auth header along.
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .max_redirects(0)
+            .timeout_global(Some(Duration::from_secs(2 * TIMEOUT)))
             .timeout_connect(Some(Duration::from_secs(TIMEOUT)))
             .timeout_recv_response(Some(Duration::from_secs(TIMEOUT)))
             .timeout_recv_body(Some(Duration::from_secs(TIMEOUT)))
@@ -81,7 +89,15 @@ impl Client {
         let path =
             config::expand(&self.endpoint.path)?.replace("{model}", self.endpoint.model.as_deref().unwrap_or(""));
         let url = format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'));
+        refuse_plain_http(&url, &self.shown_url())?;
         Ok(self.url.get_or_init(|| url))
+    }
+
+    /// The URL as configured, before ${VAR} is filled in, so errors don't
+    /// print what the environment holds.
+    fn shown_url(&self) -> String {
+        let base = self.endpoint.api_base.as_deref().unwrap_or("");
+        format!("{}/{}", base.trim_end_matches('/'), self.endpoint.path.trim_start_matches('/'))
     }
 
     /// Each question's answer, or None for one the model refused.
@@ -107,7 +123,10 @@ impl Client {
                     if !RETRY_STATUSES.contains(&code) || attempt > RETRIES {
                         bail!("{label} answered {code}: {}", error_detail(&response));
                     }
-                    let delay = retry_after.and_then(|a| a.trim().parse::<f64>().ok()).map(|a| a.clamp(0.0, 30.0));
+                    let delay = retry_after
+                        .and_then(|a| a.trim().parse::<f64>().ok())
+                        .filter(|a| a.is_finite())
+                        .map(|a| a.clamp(0.0, 30.0));
                     std::thread::sleep(Duration::from_secs_f64(delay.unwrap_or(0.5 * 2f64.powi(attempt as i32 - 1))));
                     continue;
                 }
@@ -116,8 +135,9 @@ impl Client {
             // Nothing listening isn't going to change in a few seconds; a dropped
             // or stalled connection might.
             let refused = matches!(&failure, ureq::Error::Io(e) if e.kind() == std::io::ErrorKind::ConnectionRefused);
-            if refused || attempt > RETRIES {
-                bail!("Couldn't reach {label} at {url}: {failure}");
+            let too_large = matches!(&failure, ureq::Error::BodyExceedsLimit(_));
+            if refused || too_large || attempt > RETRIES {
+                bail!("Couldn't reach {label} at {}: {failure}", self.shown_url());
             }
             std::thread::sleep(Duration::from_secs_f64(2f64.powi(attempt as i32)));
         }
@@ -145,9 +165,18 @@ impl Client {
         let mut response = request.send(body)?;
         let code = response.status().as_u16();
         let retry_after = response.headers().get("Retry-After").and_then(|v| v.to_str().ok()).map(str::to_string);
-        let body = response.body_mut().with_config().limit(u64::MAX).read_to_vec()?;
+        let body = response.body_mut().with_config().limit(MAX_RESPONSE_BYTES).read_to_vec()?;
         Ok((code, retry_after, body))
     }
+}
+
+/// Code and keys go over https, except to this machine. +shown+ is the URL
+/// as configured, for the error.
+fn refuse_plain_http(url: &str, shown: &str) -> Result<()> {
+    if !url.starts_with("http://") || config::is_local(url) {
+        return Ok(());
+    }
+    bail!("{shown} isn't https; judgelint sends code and keys over plain http only to localhost")
 }
 
 fn first_bytes(bytes: &[u8]) -> String {
@@ -174,6 +203,7 @@ fn error_detail(body: &[u8]) -> String {
         .iter()
         .find_map(|k| data.get(*k).filter(present))
         .and_then(message)
+        .map(|m| m.chars().take(300).collect())
         .unwrap_or_else(|| first_bytes(body))
 }
 
@@ -285,5 +315,13 @@ mod tests {
             }
             assert_eq!(client(entry).unwrap().url().unwrap(), url, "{provider}");
         }
+    }
+
+    #[test]
+    fn plain_http_only_to_this_machine() {
+        assert!(refuse_plain_http("http://127.0.0.1:9/v1", "x").is_ok());
+        assert!(refuse_plain_http("https://api.example.com/v1", "x").is_ok());
+        let error = refuse_plain_http("http://api.example.com/key-123", "http://api.example.com/${KEY}").unwrap_err();
+        assert!(error.to_string().contains("${KEY}") && !error.to_string().contains("key-123"), "{error}");
     }
 }

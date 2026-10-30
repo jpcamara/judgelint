@@ -11,10 +11,10 @@ use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rayon::prelude::*;
 
 use crate::cache::Cache;
-use crate::changes::{self, Changed, Changes};
+use crate::changes::{self, Changed, Changes, Commit};
 use crate::client::Client;
 use crate::config::{self, Config};
-use crate::glob::{self, Patterns};
+use crate::glob::{self, Contents, Patterns};
 use crate::paint::{self, Paint};
 use crate::providers;
 use crate::reporter::{Format, Reporter};
@@ -22,7 +22,7 @@ use crate::rule::Rule;
 use crate::runner::{Job, Runner};
 use crate::spec;
 use crate::usage::{self, Usage};
-use crate::verdict::Verdict;
+use crate::verdict::{Status, Verdict};
 
 /// Checks code against the conventions in your specs, like a CONVENTIONS.md
 /// of bullets. For each file and each rule, it asks a decision model (Jev on
@@ -127,27 +127,40 @@ struct App {
 
 impl App {
     fn check(&mut self, paths: Vec<String>) -> Result<i32> {
-        let loading = self.load_cache_early();
-        let (config, rules) = self.load_rules()?;
         let base = if self.options.pr { Some(changes::pr_base()?) } else { self.options.base.clone() };
+        // A pull request is checked against its base branch's rules, config
+        // and cache, so it can't change what it's checked against.
+        let trusted = match (&base, self.options.pr) {
+            (Some(base), true) => Some(Commit::new(base)?),
+            _ => None,
+        };
+        if let Some(commit) = trusted.as_ref().filter(|_| !self.options.no_cache) {
+            use_cache_from(commit)?;
+        }
+        let loading = self.load_cache_early();
+        let (config, rules) = self.load_rules(trusted.as_ref())?;
         let changes = base.as_deref().map(changes::since).transpose()?;
         let candidates = check_paths(&rules, &paths, changes.as_ref())?;
         if !rules.iter().any(|r| r.is_directory() || !r.context.is_empty()) {
             glob::release();
         }
         let runner = Runner::new(&config, &rules);
-        // A file no rule governs, that's ignored, or that's binary is left out.
+        // A file no rule governs, that's ignored, or that's binary is left
+        // out, and so is one judgelint won't send, with a warning.
         let prepare = |path: &String| -> Result<Option<Vec<Job>>> {
             if config.ignore.is_match(path) || !rules.iter().any(|r| !r.is_directory() && r.applies_to(path)) {
                 return Ok(None);
             }
-            let contents = std::fs::read(path).with_context(|| format!("Couldn't read {path}"))?;
-            if contents[..contents.len().min(8000)].contains(&0) {
-                return Ok(None);
-            }
+            let text = match glob::read_to_send(path) {
+                Ok(Contents::Text(text)) => text,
+                Ok(Contents::Binary) => return Ok(None),
+                Ok(Contents::TooLarge) => return runner.skip_file(path).map(Some),
+                Err(e) => {
+                    eprintln!("judgelint: left out {e:#}");
+                    return Ok(None);
+                }
+            };
             let lines = changes.as_ref().map_or(Some(&Changed::All), |c| c.get(path.as_str()));
-            let text =
-                String::from_utf8(contents).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
             runner.prepare_file(path, text, lines).map(Some)
         };
         let mut files = 0;
@@ -181,12 +194,21 @@ impl App {
             &usage,
         )?;
         self.cost_line();
+        // Checking a change, a file that couldn't be judged fails too.
+        let unjudged = verdicts
+            .iter()
+            .filter(|v| matches!(v.status, Status::Skipped | Status::Refused) && rules[v.rule].is_error())
+            .count();
+        if changes.is_some() && unjudged > 0 {
+            eprintln!("judgelint: {unjudged} checks of changed files were skipped or refused, so the run fails");
+            return Ok(1);
+        }
         Ok(i32::from(verdicts.iter().any(|v| v.failing(&rules))))
     }
 
     fn test(&mut self, ids: Vec<String>) -> Result<i32> {
         let loading = self.load_cache_early();
-        let (config, mut rules) = self.load_rules()?;
+        let (config, mut rules) = self.load_rules(None)?;
         if !ids.is_empty() {
             let unknown: Vec<&str> =
                 ids.iter().filter(|id| !rules.iter().any(|r| &r.id == *id)).map(String::as_str).collect();
@@ -219,10 +241,23 @@ impl App {
         Ok(i32::from(!examples.iter().all(|e| e.correct())))
     }
 
-    /// Prices the planned requests and refuses a run over max_cost_usd.
+    /// Prices the planned requests and refuses a run over max_cost_usd, or
+    /// one it can't price.
     fn guard_cost(&self, config: &Config, runner: &Runner, jobs: &[Job], clients: &[Client]) -> Result<()> {
-        let Some(estimate) = runner.estimated_cost(jobs, clients) else { return Ok(()) };
-        if estimate <= config.max_cost_usd || self.options.yes {
+        if self.options.yes {
+            return Ok(());
+        }
+        let Some(estimate) = runner.estimated_cost(jobs, clients) else {
+            let unpriced: Vec<String> =
+                clients.iter().filter(|c| c.endpoint.price_per_million.is_none()).map(|c| c.endpoint.label()).collect();
+            bail!(
+                "This run would send {} requests to {}, which has no price, so max_cost_usd can't be checked. \
+                 Set its price_per_million in .judgelint.yml, or pass --yes to run it anyway.",
+                runner.request_count(jobs),
+                unpriced.join(", ")
+            );
+        };
+        if estimate <= config.max_cost_usd {
             return Ok(());
         }
         bail!(
@@ -241,7 +276,7 @@ impl App {
     }
 
     fn list_rules(&mut self) -> Result<i32> {
-        let (_config, rules) = self.load_rules()?;
+        let (_config, rules) = self.load_rules(None)?;
         for rule in &rules {
             let count = if rule.is_directory() {
                 format!("{} dirs", rule.directories()?.len())
@@ -279,9 +314,9 @@ impl App {
         Ok(0)
     }
 
-    fn load_rules(&self) -> Result<(Config, Vec<Rule>)> {
-        let config = Config::load(self.options.config.as_deref(), self.options.model.as_deref())?;
-        let rules = spec::discover(config.threshold, &config.ignore)?;
+    fn load_rules(&self, commit: Option<&Commit>) -> Result<(Config, Vec<Rule>)> {
+        let config = Config::load(self.options.config.as_deref(), self.options.model.as_deref(), commit)?;
+        let rules = spec::discover(config.threshold, &config.ignore, commit)?;
         Ok((config, rules))
     }
 
@@ -307,6 +342,26 @@ impl App {
         };
         Ok((clients, cache))
     }
+}
+
+/// Puts the commit's cache in place of the working tree's, or none when it
+/// has none: answers a pull request brings along could say anything.
+fn use_cache_from(commit: &Commit) -> Result<()> {
+    let path = std::path::Path::new(config::CACHE);
+    let replace = || -> std::io::Result<()> {
+        match commit.read(config::CACHE).map_err(std::io::Error::other)? {
+            Some(bytes) => {
+                std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))?;
+                let temporary = format!("{}.{}.tmp", config::CACHE, std::process::id());
+                std::fs::write(&temporary, bytes)?;
+                // A rename replaces a link itself, never what it points to.
+                std::fs::rename(&temporary, path)
+            }
+            None if path.symlink_metadata().is_ok() => std::fs::remove_file(path),
+            None => Ok(()),
+        }
+    };
+    replace().with_context(|| format!("Couldn't put {}'s {} in place", commit.reference, config::CACHE))
 }
 
 /// The files to check, before the ignored and binary ones are left out.

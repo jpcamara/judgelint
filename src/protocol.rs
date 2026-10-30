@@ -1,7 +1,7 @@
 //! The two request shapes decision models are served with. Each renders a
 //! Question as a yes/no question or a choice, and reads back the probability
-//! of yes, or a choice's probability for each option. A missing answer is a
-//! refusal.
+//! of yes, or a choice's probability for each option. An answer the model
+//! marks as a refusal is None; a missing or malformed one is an error.
 
 use anyhow::{Result, anyhow};
 use serde::Deserialize;
@@ -38,8 +38,11 @@ impl Answer {
         }
     }
 
-    /// A cached answer, if it fits the question.
+    /// A cached answer, if it fits the question and every value is a probability.
     pub fn from_cached(question: &Question, values: Vec<f64>) -> Option<Answer> {
+        if !values.iter().all(|&v| probability(v).is_some()) {
+            return None;
+        }
         match (question.choice, values.as_slice()) {
             (false, [p]) => Some(Answer::Yes(*p)),
             (true, _) if values.len() == question.options.len() => Some(Answer::Choice(values)),
@@ -178,14 +181,14 @@ fn is_refusal(answer: Option<&Value>) -> bool {
 }
 
 fn shown(answer: Option<&Value>) -> String {
-    answer.map_or_else(|| "nothing".into(), Value::to_string)
+    answer.map_or_else(|| "nothing".into(), |a| a.to_string().chars().take(200).collect())
 }
 
 fn yes(answer: Option<&Value>, field: &str, question: &Question) -> Result<Option<Answer>> {
     if is_refusal(answer) {
         return Ok(None);
     }
-    match answer.and_then(|a| a.get(field)).and_then(Value::as_f64) {
+    match answer.and_then(|a| a.get(field)).and_then(Value::as_f64).and_then(probability) {
         Some(p) => Ok(Some(Answer::Yes(p))),
         None => Err(anyhow!("No yes/no answer for {}: {}", question.key, shown(answer))),
     }
@@ -198,12 +201,26 @@ fn choice(answer: Option<&Value>, probabilities: Option<Value>, question: &Quest
     let Some(Value::Object(probabilities)) = probabilities else {
         return Err(anyhow!("No choice answer for {}: {}", question.key, shown(answer)));
     };
+    let malformed = || anyhow!("Malformed choice answer for {}: {}", question.key, shown(answer));
+    // An option left out has no chance, but what's there must add up to one.
     let values = question
         .options
         .iter()
-        .map(|(option, _)| probabilities.get(option).and_then(Value::as_f64).unwrap_or(0.0))
-        .collect();
+        .map(|(option, _)| match probabilities.get(option) {
+            None => Some(0.0),
+            Some(value) => value.as_f64().and_then(probability),
+        })
+        .collect::<Option<Vec<f64>>>()
+        .ok_or_else(malformed)?;
+    if !(0.95..=1.05).contains(&values.iter().sum::<f64>()) {
+        return Err(malformed());
+    }
     Ok(Some(Answer::Choice(values)))
+}
+
+/// +value+ as a probability: a number from 0 to 1, give or take rounding.
+fn probability(value: f64) -> Option<f64> {
+    (value.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&value)).then(|| value.clamp(0.0, 1.0))
 }
 
 /// [{value, probability}] as {value: probability}.
@@ -298,5 +315,30 @@ mod tests {
         let smell = question("smell", "", 1, 40);
         let error = Protocol::SystemOne.parse(&json!({"answers": {}}), &[&smell]).err().unwrap();
         assert!(error.to_string().contains("No yes/no answer for smell.1-40"), "{error}");
+    }
+
+    #[test]
+    fn answers_must_be_probabilities() {
+        let smell = question("smell", "", 1, 40);
+        for answer in [json!(1.5), json!(-0.2), json!("0.9")] {
+            let data = json!({"answers": {"smell.1-40": {"type": "noul", "noul": answer}}});
+            assert!(Protocol::SystemOne.parse(&data, &[&smell]).is_err(), "{answer}");
+        }
+        assert!(Answer::from_cached(&smell, vec![f64::NAN]).is_none());
+        assert!(Answer::from_cached(&smell, vec![2.0]).is_none());
+        assert!(Answer::from_cached(&smell, vec![0.4]).is_some());
+    }
+
+    #[test]
+    fn a_choice_must_add_up_to_one() {
+        let smell = question("smell", "convention: Smells.", 1, 40);
+        let choice = |probabilities: Value| {
+            let data = json!({"answers": {"smell.1-40": {"type": "choice", "probabilities": probabilities}}});
+            Protocol::SystemOne.parse(&data, &[&smell])
+        };
+        assert!(choice(json!({})).is_err());
+        assert!(choice(json!({"breaks": 0.2, "follows": 0.2})).is_err());
+        assert!(choice(json!({"breaks": "x", "follows": 1.0})).is_err());
+        assert!(choice(json!({"breaks": 0.25, "follows": 0.75})).is_ok(), "a left-out option has no chance");
     }
 }

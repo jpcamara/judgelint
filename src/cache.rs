@@ -12,7 +12,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
-use std::os::unix::fs::FileExt;
+use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result, bail};
@@ -43,6 +43,9 @@ impl Cache {
     pub fn open(path: Option<&str>) -> Result<Cache> {
         let mut cache =
             Cache { path: path.map(str::to_string), file: None, index: Vec::new(), end: 0, out: Mutex::new(None) };
+        if let Some(path) = path {
+            refuse_link(path)?;
+        }
         if let Some(path) = path.filter(|p| std::path::Path::new(p).exists()) {
             let file = File::open(path).with_context(|| format!("Couldn't read {path}"))?;
             (cache.index, cache.end) = index(&file).with_context(|| format!("Couldn't read {path}"))?;
@@ -88,14 +91,32 @@ impl Cache {
         if let Some(dir) = std::path::Path::new(path).parent() {
             fs::create_dir_all(dir)?;
         }
+        refuse_link(path)?;
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        if file.metadata()?.len() != self.end {
+        // The file indexed when the run began, or a new one: never another
+        // put in its place since.
+        let (now, then) = (file.metadata()?, self.file.as_ref().map(File::metadata).transpose()?);
+        let same = then.map_or(now.len() == 0, |then| then.dev() == now.dev() && then.ino() == now.ino());
+        if !same {
+            bail!("{path} changed while judgelint ran; run it again");
+        }
+        if now.len() != self.end {
             file.set_len(self.end)?;
         }
         if self.end == 0 {
             file.write_all(HEADER)?;
         }
         Ok(file)
+    }
+}
+
+/// A cache that's a link could write anywhere it points.
+fn refuse_link(path: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("{path} is a link; judgelint keeps its cache in a plain file")
+        }
+        _ => Ok(()),
     }
 }
 
@@ -257,5 +278,14 @@ mod tests {
         cache.flush().unwrap();
         drop(cache);
         assert_eq!(Cache::open(Some(&path)).unwrap().get(&key("q", "s", "m")).unwrap(), Some(vec![0.5]));
+    }
+
+    #[test]
+    fn a_cache_that_is_a_link_is_an_error() {
+        let dir = TempDir::new();
+        let target = dir.write("elsewhere.bin", "");
+        let path = dir.path("cache.bin");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(Cache::open(Some(&path)).err().unwrap().to_string().contains("is a link"));
     }
 }

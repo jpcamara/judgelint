@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
+use crate::changes::Commit;
 use crate::glob::Patterns;
 use crate::protocol::Protocol;
 use crate::providers;
@@ -87,6 +88,18 @@ pub fn expand(value: &str) -> Result<String> {
         .into_owned())
 }
 
+/// Whether a URL is on this machine: localhost, 127.x, or ::1.
+pub fn is_local(url: &str) -> bool {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.rsplit('@').next().unwrap_or("");
+    let host = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => host.split(':').next().unwrap_or(""),
+    };
+    host == "localhost" || host == "::1" || host.starts_with("127.")
+}
+
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 struct File {
@@ -104,15 +117,19 @@ pub struct Config {
 }
 
 impl Config {
-    /// +model+, from --model, replaces the file's models.
-    pub fn load(path: Option<&str>, model: Option<&str>) -> Result<Config> {
+    /// +model+, from --model, replaces the file's models. With a commit, the
+    /// file is read from it, unless it's named by an absolute path.
+    pub fn load(path: Option<&str>, model: Option<&str>, commit: Option<&Commit>) -> Result<Config> {
         let file = path.unwrap_or(FILE);
-        let mut data: File = if std::path::Path::new(file).exists() {
-            parse_yaml(&read(file)?, file)?
-        } else if path.is_some() {
-            bail!("No config file at {file}");
-        } else {
-            File::default()
+        let text = match commit.filter(|_| !file.starts_with('/')) {
+            Some(commit) => commit.read(file)?.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+            None if std::path::Path::new(file).exists() => Some(read(file)?),
+            None => None,
+        };
+        let mut data: File = match text {
+            Some(text) => parse_yaml(&text, file)?,
+            None if path.is_some() => bail!("No config file at {file}"),
+            None => File::default(),
         };
         if let Some(model) = model {
             data.models = Some(OneOrMany::One(Value::String(model.to_string())));
@@ -184,6 +201,9 @@ pub struct Endpoint {
     pub max_state_tokens: usize,
     pub max_request_tokens: usize,
     pub needs: Option<String>,
+    /// What its answers are cached under: the provider and model, plus where
+    /// and how it's asked when that isn't the preset's way.
+    pub cache_label: String,
 }
 
 impl Endpoint {
@@ -205,9 +225,13 @@ impl Endpoint {
         let model = settings.model.or_else(|| from_preset(|p| &p.model));
         // A preset's prices are per model; another model has no price unless
         // the entry gives one, and its cost shows as unknown.
+        // A server on this machine costs nothing.
+        let local = settings.api_base.as_deref().or_else(|| preset.and_then(|p| p.api_base.as_deref()));
+        let local = local.is_some_and(|base| !base.contains("${") && is_local(base));
         let price_per_million = settings
             .price_per_million
-            .or_else(|| preset.and_then(|p| p.prices.get(model.as_deref().unwrap_or("")).copied()));
+            .or_else(|| preset.and_then(|p| p.prices.get(model.as_deref().unwrap_or("")).copied()))
+            .or(local.then_some(0.0));
         let count = |own: Option<usize>, preset: Option<usize>, default: usize, key: &str| -> Result<usize> {
             match own.or(preset).unwrap_or(default) {
                 0 => bail!("models: {key} must be at least 1"),
@@ -215,15 +239,35 @@ impl Endpoint {
             }
         };
         let auth = settings.auth.or_else(|| from_preset(|p| &p.auth)).unwrap_or_else(|| "bearer".into());
+        // A preset's key goes only to the preset's own address, and its
+        // answers are cached apart from those of anything else.
+        let moved = settings.api_base.is_some() && settings.api_base != from_preset(|p| &p.api_base);
+        let as_preset = !moved
+            && settings.path.is_none()
+            && settings.protocol.is_none()
+            && settings.provider_options.is_empty()
+            && preset.is_some();
+        let api_key_env = settings.api_key_env.or_else(|| if moved { None } else { from_preset(|p| &p.api_key_env) });
+        let api_base = settings.api_base.or_else(|| from_preset(|p| &p.api_base));
+        let path = settings.path.or_else(|| from_preset(|p| &p.path)).unwrap_or_else(|| "/v1/systemone".into());
+        let protocol = settings.protocol.or(preset.and_then(|p| p.protocol)).unwrap_or(Protocol::SystemOne);
+        let own_label = format!("{provider}/{}", model.as_deref().unwrap_or(""));
+        let cache_label = if as_preset {
+            own_label
+        } else {
+            let options = Value::Object(settings.provider_options.clone());
+            format!("{own_label} {} {path} {protocol:?} {options}", api_base.as_deref().unwrap_or(""))
+        };
         if !(["bearer", "basic", "none"].contains(&auth.as_str()) || auth.starts_with("header:")) {
             bail!("auth is bearer, basic, none, or header:<name>, not {auth}");
         }
         Ok(Endpoint {
-            api_base: settings.api_base.or_else(|| from_preset(|p| &p.api_base)),
-            path: settings.path.or_else(|| from_preset(|p| &p.path)).unwrap_or_else(|| "/v1/systemone".into()),
-            protocol: settings.protocol.or(preset.and_then(|p| p.protocol)).unwrap_or(Protocol::SystemOne),
+            api_base,
+            path,
+            protocol,
             auth,
-            api_key_env: settings.api_key_env.or_else(|| from_preset(|p| &p.api_key_env)),
+            api_key_env,
+            cache_label,
             headers: settings.headers,
             provider_options: settings.provider_options,
             price_per_million,
@@ -258,7 +302,7 @@ mod tests {
     /// The config a .judgelint.yml of +yaml+ gives, with --model +model+.
     fn load(yaml: &str, model: Option<&str>) -> Result<Config> {
         let dir = TempDir::new();
-        Config::load(Some(&dir.write(FILE, yaml)), model)
+        Config::load(Some(&dir.write(FILE, yaml)), model, None)
     }
 
     fn labels(config: &Config) -> Vec<String> {
@@ -344,5 +388,31 @@ mod tests {
     #[test]
     fn numbers_in_exponent_form() {
         assert!(close(load("max_cost_usd: 1.0e-07\n", None).unwrap().max_cost_usd, 1e-7));
+    }
+
+    #[test]
+    fn a_preset_moved_elsewhere_loses_its_key_and_its_cache() {
+        let preset = Endpoint::new(json!("typesafe")).unwrap();
+        let moved = Endpoint::new(json!({"provider": "typesafe", "api_base": "https://elsewhere.example"})).unwrap();
+        assert_eq!(moved.api_key_env, None);
+        assert_eq!(preset.cache_label, "typesafe/jev-latest");
+        assert_ne!(moved.cache_label, preset.cache_label);
+        let named = json!({"provider": "typesafe", "api_base": "https://elsewhere.example", "api_key_env": "MINE"});
+        assert_eq!(Endpoint::new(named).unwrap().api_key_env.as_deref(), Some("MINE"));
+        let same = json!({"provider": "typesafe", "api_base": "https://api.typesafe.ai"});
+        assert_eq!(Endpoint::new(same).unwrap().cache_label, preset.cache_label);
+    }
+
+    #[test]
+    fn servers_on_this_machine_cost_nothing() {
+        for local in ["http://localhost:8080", "http://127.0.0.1", "http://[::1]:1/v1", "https://user@localhost"] {
+            assert!(is_local(local), "{local}");
+        }
+        for remote in ["https://api.typesafe.ai", "http://localhost.example.com", "http://10.0.0.1", "http://127"] {
+            assert!(!is_local(remote), "{remote}");
+        }
+        let custom = |base: &str| Endpoint::new(json!({"api_base": base, "model": "m"})).unwrap().price_per_million;
+        assert_eq!(custom("http://localhost:8080"), Some(0.0));
+        assert_eq!(custom("https://gateway.example.com"), None);
     }
 }
