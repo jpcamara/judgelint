@@ -12,7 +12,6 @@
 //! files were given in, so output doesn't depend on timing.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -23,7 +22,7 @@ use sha2::{Digest, Sha256};
 use crate::cache::{self, Cache};
 use crate::changes::{Changed, Changes};
 use crate::client::Client;
-use crate::config::{Config, THREADS, WINDOW_LINES};
+use crate::config::{Config, WINDOW_LINES};
 use crate::project::Project;
 use crate::protocol::{Answer, Protocol};
 use crate::question::{Kind, Question, hex};
@@ -36,8 +35,8 @@ use crate::verdict::{Status, Verdict};
 const PLACE_AT: f64 = 0.5;
 /// A choice takes at most this many options.
 const MAX_OPTIONS: usize = 255;
-/// A file's requests in flight at once.
-const REQUESTS_AT_ONCE: usize = 16;
+/// Requests in flight at once, across files.
+const REQUESTS_AT_ONCE: usize = 32;
 
 /// One rule's questions about a file, shared by the files that match.
 type Questions = Arc<Vec<Arc<Question>>>;
@@ -332,14 +331,23 @@ impl<'a> Runner<'a> {
         lines: Option<&Changed>,
         expected: Option<Expected>,
     ) -> Result<Job> {
+        let prose = rules.first().and_then(|&r| self.rules[r].prose.clone());
+        let (_, json, state_digest) = state(self.project, &source, read, prose.as_deref())?;
+        // A state past every model's limit is skipped before its questions
+        // are made: a file of short lines could make a great many.
+        let too_large = self.config.models.iter().all(|m| json.len() / 3 >= m.max_state_tokens);
         let mut by_rule: Vec<(usize, Questions)> = Vec::new();
         let mut shapes: Vec<String> = Vec::new();
-        let mut shared = true;
+        let mut shared = !too_large;
         for &index in rules {
             let rule = &self.rules[index];
             let ranges: Vec<(u32, u32)> =
                 rule.ranges(&source, WINDOW_LINES).into_iter().filter(|&(f, l)| touched(lines, f, l)).collect();
             if ranges.is_empty() {
+                continue;
+            }
+            if too_large {
+                by_rule.push((index, Arc::default()));
                 continue;
             }
             if rule.is_directory() {
@@ -357,8 +365,6 @@ impl<'a> Runner<'a> {
         } else {
             Arc::new(QuestionSet::new(by_rule))
         };
-        let prose = rules.first().and_then(|&r| self.rules[r].prose.clone());
-        let (_, json, state_digest) = state(self.project, &source, read, prose.as_deref())?;
         // Decisions sends a structured state as its JSON text.
         let decisions = if self.decisions && prose.is_some() {
             2 + json.len() + json.iter().filter(|&&b| b == b'"' || b == b'\\').count()
@@ -375,7 +381,7 @@ impl<'a> Runner<'a> {
             questions,
             requests: Vec::new(),
             expected,
-            skipped: false,
+            skipped: too_large,
             verdicts: None,
         })
     }
@@ -531,32 +537,22 @@ impl<'a> Runner<'a> {
         result.and(saved)
     }
 
+    /// Sends what's left, REQUESTS_AT_ONCE at a time across every file, and
+    /// takes no new file after an error: a dead endpoint fails the run once,
+    /// not once a file.
     fn send_all(&self, jobs: &mut [Job], clients: &[Client], cache: &Cache) -> Result<()> {
-        let open: Vec<Mutex<&mut Job>> = jobs.iter_mut().filter(|j| j.verdicts.is_none()).map(Mutex::new).collect();
-        let next = AtomicUsize::new(0);
-        let first_error: Mutex<Option<anyhow::Error>> = Mutex::new(None);
-        std::thread::scope(|scope| {
-            for _ in 0..THREADS.min(open.len()) {
-                scope.spawn(|| {
-                    while let Some(slot) = open.get(next.fetch_add(1, Ordering::Relaxed)) {
-                        let mut job = slot.lock().unwrap_or_else(|e| e.into_inner());
-                        if let Err(e) = self.ask(&mut job, clients, cache) {
-                            first_error.lock().unwrap_or_else(|e| e.into_inner()).get_or_insert(e);
-                            continue;
-                        }
-                        let verdicts = self.verdicts(&job);
-                        job.settle(verdicts);
-                    }
-                });
-            }
-        });
-        match first_error.into_inner().unwrap_or_else(|e| e.into_inner()) {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(REQUESTS_AT_ONCE).build()?;
+        pool.install(|| {
+            jobs.par_iter_mut().filter(|job| job.verdicts.is_none()).try_for_each(|job| {
+                self.ask(job, clients, cache)?;
+                let verdicts = self.verdicts(job);
+                job.settle(verdicts);
+                Ok(())
+            })
+        })
     }
 
-    /// Sends every request at once: a file's packed requests and every model's.
+    /// Sends a file's requests at once: its packed requests and every model's.
     fn ask(&self, job: &mut Job, clients: &[Client], cache: &Cache) -> Result<()> {
         let (state, json) = job.state(self.project)?;
         let questions = job.questions.clone();
@@ -570,18 +566,7 @@ impl<'a> Runner<'a> {
             let asked: Vec<&Question> = request.questions.iter().map(|&i| &*questions.flat[i as usize]).collect();
             client.judge(state, &asked)
         };
-        let mut results: Vec<Result<Vec<Option<Answer>>>> = Vec::with_capacity(job.requests.len());
-        for group in job.requests.chunks(REQUESTS_AT_ONCE) {
-            match group {
-                [request] => results.push(send(request)),
-                requests => std::thread::scope(|scope| {
-                    let handles: Vec<_> = requests.iter().map(|request| scope.spawn(|| send(request))).collect();
-                    let joined =
-                        handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err(anyhow!("a request failed"))));
-                    results.extend(joined);
-                }),
-            }
-        }
+        let results: Vec<Result<Vec<Option<Answer>>>> = job.requests.par_iter().map(send).collect();
         let state = hex(&job.state_digest);
         job.answers.resize_with(clients.len(), Vec::new);
         for (request, answers) in job.requests.iter().zip(results) {
