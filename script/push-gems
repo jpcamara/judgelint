@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Pushes built gems to RubyGems.org, platform gems before the plain one:
+#
+#   script/push-gems pkg/*.gem
+#
+# The release workflow runs this. It skips a gem that's already on
+# RubyGems.org with the same checksum, so a push that stopped partway can be
+# re-run. If one is there with a different checksum, it pushes nothing.
+
+require "digest"
+require "json"
+require "net/http"
+require "rubygems/package"
+
+abort "usage: script/push-gems GEM..." if ARGV.empty?
+
+gems = ARGV.map { |path| [path, Gem::Package.new(path).spec] }
+names = gems.map { |_, spec| spec.name }.uniq
+abort "expected gems with one name, got #{names.join(', ')}" unless names.size == 1
+
+response = Net::HTTP.get_response(URI("https://rubygems.org/api/v1/versions/#{names.first}.json"))
+published =
+  case response
+  when Net::HTTPNotFound then []
+  when Net::HTTPSuccess then JSON.parse(response.body)
+  else abort "couldn't list #{names.first}'s versions: #{response.code} #{response.message}"
+  end
+
+ordered = gems.sort_by { |_, spec| spec.platform == Gem::Platform::RUBY ? 1 : 0 }
+missing = ordered.reject do |path, spec|
+  existing = published.find do |version|
+    version["number"] == spec.version.to_s && version["platform"] == spec.platform.to_s
+  end
+  next false unless existing
+
+  name = File.basename(path)
+  abort "#{name} is on RubyGems.org with a different checksum" if existing["sha"] != Digest::SHA256.file(path).hexdigest
+  puts "#{name} is already on RubyGems.org"
+  true
+end
+
+missing.each do |path, _|
+  system("gem", "push", path) or abort "couldn't push #{path}"
+end
