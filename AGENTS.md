@@ -16,6 +16,16 @@ change them; raise it with the maintainer instead.
   The README describes it under "CI", and
   `test_a_finding_on_a_line_the_change_didnt_touch_passes` and
   `a_change_counts_only_the_share_of_where_on_its_lines` cover it.
+- **`--pr` uses the pull request's own specs and cache.** Only
+  `.judgelint.yml` comes from the base branch, because it says where code
+  is sent and which key goes with it. That's the line: stop a pull request
+  from sending code or keys somewhere new. Changing its own rules or cached
+  answers is allowed, since nobody has to merge it and a repository can
+  hold fork workflows until they're approved. 0.2.1 took the specs and
+  cache from the base branch too; new rules then waited for a merge and
+  every push asked again, which made `--pr` hard to use, so 0.2.3 put them
+  back. `test_pr_uses_the_base_branchs_config_and_its_own_rules_and_cache`
+  covers it.
 
 ## Reviews
 

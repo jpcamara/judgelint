@@ -12,7 +12,7 @@
 //! cache is an error, never overwritten.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufReader, Cursor, Read, Seek};
+use std::io::{BufReader, Read, Seek};
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Mutex;
 
@@ -29,8 +29,8 @@ const PENDING_BYTES: usize = 1 << 20;
 
 pub struct Cache {
     path: Option<String>,
-    /// What was indexed: the file, or a cache read from a commit.
-    store: Option<Store>,
+    /// The file that was indexed.
+    store: Option<File>,
     /// Keys, sorted, each with its probabilities' offset and count.
     index: Vec<(Key, u64)>,
     /// Where the last whole record ended when it was indexed, or 0 when the
@@ -38,25 +38,6 @@ pub struct Cache {
     end: u64,
     /// Records put since they were last written out.
     pending: Mutex<Vec<u8>>,
-}
-
-enum Store {
-    File(File),
-    Memory(Vec<u8>),
-}
-
-impl Store {
-    fn read_exact_at(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<()> {
-        match self {
-            Store::File(file) => file.read_exact_at(buffer, offset),
-            Store::Memory(bytes) => {
-                let start = usize::try_from(offset).unwrap_or(usize::MAX);
-                let found = bytes.get(start..start.saturating_add(buffer.len()));
-                buffer.copy_from_slice(found.ok_or(std::io::ErrorKind::UnexpectedEof)?);
-                Ok(())
-            }
-        }
-    }
 }
 
 pub fn key(question_digest: &str, state_digest: &str, model: &str) -> Key {
@@ -76,16 +57,9 @@ impl Cache {
             let length = file.metadata()?.len();
             (cache.index, cache.end) = index(BufReader::with_capacity(1 << 20, &file), length)
                 .with_context(|| format!("Couldn't read {path}"))?;
-            cache.store = Some(Store::File(file));
+            cache.store = Some(file);
         }
         Ok(cache)
-    }
-
-    /// A cache read from a commit, kept in memory: what's put in it is never
-    /// written anywhere.
-    pub fn in_memory(bytes: Vec<u8>) -> Result<Cache> {
-        let (index, end) = index(Cursor::new(&bytes), bytes.len() as u64).context("Couldn't read the cache")?;
-        Ok(Cache { path: None, store: Some(Store::Memory(bytes)), index, end, pending: Mutex::default() })
     }
 
     pub fn get(&self, key: &Key) -> Result<Option<Vec<f64>>> {
@@ -134,9 +108,7 @@ impl Cache {
         // another put in its place.
         let now = file.metadata()?;
         let replaced = match &self.store {
-            Some(Store::File(then)) => {
-                then.metadata().map(|then| (then.dev(), then.ino()) != (now.dev(), now.ino()))?
-            }
+            Some(then) => then.metadata().map(|then| (then.dev(), then.ino()) != (now.dev(), now.ino()))?,
             _ => false,
         };
         if replaced || now.len() < self.end {
@@ -278,21 +250,6 @@ mod tests {
         for (key, value) in [(a, 0.1), (b, 0.2), (c, 0.3)] {
             assert_eq!(cache.get(&key).unwrap(), Some(vec![value]));
         }
-    }
-
-    #[test]
-    fn a_cache_in_memory_answers_and_keeps_nothing() {
-        let dir = TempDir::new();
-        let path = dir.path("cache.bin");
-        let saved = Cache::open(Some(&path)).unwrap();
-        saved.put(&key("q", "s", "m"), &[0.4]).unwrap();
-        saved.flush().unwrap();
-        let cache = Cache::in_memory(fs::read(&path).unwrap()).unwrap();
-        assert_eq!(cache.get(&key("q", "s", "m")).unwrap(), Some(vec![0.4]));
-        cache.put(&key("q2", "s", "m"), &[0.5]).unwrap();
-        cache.flush().unwrap();
-        assert_eq!(Cache::open(Some(&path)).unwrap().get(&key("q2", "s", "m")).unwrap(), None);
-        assert!(Cache::in_memory(Vec::new()).unwrap().get(&key("q", "s", "m")).unwrap().is_none());
     }
 
     #[test]
