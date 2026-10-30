@@ -1,0 +1,6 @@
+# The toolchain CI and release builds use. Cargo.toml's rust-version is the
+# oldest Rust that can still build judgelint from source.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

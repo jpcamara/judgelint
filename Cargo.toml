@@ -2,7 +2,7 @@
 name = "judgelint"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 description = "Checks code against conventions written in plain English, using decision models"
 repository = "https://github.com/jpcamara/judgelint"
 license = "MIT"
