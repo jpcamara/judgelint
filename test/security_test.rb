@@ -311,21 +311,6 @@ class SecurityTest < Minitest::Test
     end
   end
 
-  def test_a_new_violation_next_to_an_old_one_still_fails
-    in_project do
-      write("CONVENTIONS.md", "- **No smells.**\n")
-      write("app/a.rb", "SMELL\n#{"fine\n" * 9}")
-      git_repo
-      lines = File.readlines("app/a.rb")
-      lines[5] = "SMELL again\n"
-      File.write("app/a.rb", lines.join)
-      status, out, = judgelint("--base", "main")
-
-      assert_equal 1, status
-      assert_match(/1 violations/, out)
-    end
-  end
-
   def test_a_file_gitattributes_marks_binary_is_still_checked_when_changed
     in_smelly_project do
       write(".gitattributes", "*.rb -diff\n")

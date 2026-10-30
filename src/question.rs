@@ -1,6 +1,7 @@
 //! One rule asked about one range of a file. The model sees the whole file;
 //! the question points at the lines. When a change touched only some of a
-//! window's lines, it points at those, and the rest is context.
+//! window's lines, it points at those, so code the change didn't touch can't
+//! fail it.
 //!
 //! A spec's bullet is a choice between breaking the rule, following it, and
 //! the rule not applying. The same request asks which line (or, for a
@@ -34,6 +35,8 @@ pub struct Question {
     pub first: u32,
     pub last: u32,
     pub kind: Kind,
+    /// The changed lines in the range, or None to ask about all of it.
+    pub lines: Option<Vec<u32>>,
     pub key: String,
     pub instructions: String,
     pub yes_means: Option<String>,
@@ -102,6 +105,7 @@ impl Question {
             first,
             last,
             kind,
+            lines,
             key,
             instructions,
             yes_means,

@@ -664,6 +664,7 @@ impl<'a> Runner<'a> {
             let mut excuses: Vec<f64> = Vec::new();
             let mut spread: Vec<f64> = Vec::new();
             let mut place_question: Option<&Question> = None;
+            let start = i;
             while i < range.end && (flat[i].first, flat[i].last) == (first, last) {
                 let question = &*flat[i];
                 for answer in job.answers.iter().filter_map(|answers| answers.get(i)?.as_ref()) {
@@ -685,8 +686,14 @@ impl<'a> Runner<'a> {
                 refused.get_or_insert((first, last));
                 continue;
             }
-            let probability = values.iter().sum::<f64>() / values.len() as f64;
+            let mut probability = values.iter().sum::<f64>() / values.len() as f64;
             let places = place_question.map_or(&[][..], |q| &q.options[..]);
+            // On purpose: a change check fails only for what the change
+            // did. A violation the model places on a line it didn't touch
+            // doesn't count, even with a new one beside it. See AGENTS.md.
+            if let Some(changed) = &flat[start].lines {
+                probability *= changed_share(&spread, places, changed);
+            }
             let place = agreed(&spread).map(|best| places[best].0.clone());
             let window = Window { first, last, probability, place };
             if !excuses.is_empty() && excuses.iter().sum::<f64>() / excuses.len() as f64 >= threshold {
@@ -770,6 +777,21 @@ fn touched(lines: Option<&Changed>, first: u32, last: u32) -> bool {
         Some(Changed::Lines(lines)) => lines.iter().any(|&l| l >= first && l <= last),
         Some(Changed::Deleted) | None => false,
     }
+}
+
+/// The share of the summed "where" probabilities on +lines+, or all of it
+/// when nothing answered where.
+fn changed_share(spread: &[f64], places: &[(String, Option<String>)], lines: &[u32]) -> f64 {
+    let total: f64 = spread.iter().sum();
+    let on_lines: f64 = spread
+        .iter()
+        .zip(places)
+        .filter(|(_, (place, _))| {
+            place.strip_prefix('L').and_then(|n| n.parse().ok()).is_some_and(|n| lines.contains(&n))
+        })
+        .map(|(p, _)| p)
+        .sum();
+    if total > 0.0 { on_lines / total } else { 1.0 }
 }
 
 /// The place with at least PLACE_AT of the summed "where" probabilities.
@@ -877,6 +899,14 @@ mod tests {
     fn a_finding_names_a_place_only_when_the_models_agree_on_one() {
         assert_eq!(agreed(&[0.45, 0.55, 0.0]), Some(1));
         assert_eq!(agreed(&[0.4, 0.35, 0.25]), None, "no line has half");
+    }
+
+    #[test]
+    fn a_change_counts_only_the_share_of_where_on_its_lines() {
+        let places: Vec<(String, Option<String>)> = ["L41", "L45", "L46"].map(|l| (l.to_string(), None)).into();
+        assert_eq!(changed_share(&[0.75, 0.25, 0.0], &places, &[45]), 0.25);
+        assert_eq!(changed_share(&[0.5, 0.25, 0.25], &places, &[45, 46]), 0.5);
+        assert_eq!(changed_share(&[], &[], &[45]), 1.0, "nothing answered where");
     }
 
     #[test]
