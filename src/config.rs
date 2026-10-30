@@ -16,6 +16,7 @@ use regex::Regex;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
+use ureq::http::{HeaderName, Uri};
 
 use crate::changes::Commit;
 use crate::glob::Patterns;
@@ -63,7 +64,17 @@ pub fn parse_yaml<T: DeserializeOwned + Default>(text: &str, path: &str) -> Resu
     if blank {
         return Ok(T::default());
     }
-    serde_saphyr::from_str(text).map_err(|e| anyhow!("{path}: {e}"))
+    // Configs and frontmatter are small: anything this large is something else.
+    let options = serde_saphyr::options! {
+        budget: serde_saphyr::budget! {
+            max_documents: 1,
+            max_depth: 32,
+            max_nodes: 50_000,
+            max_total_scalar_bytes: 1 << 20,
+        },
+        reject_unsupported_tags: true,
+    };
+    serde_saphyr::from_str_with_options(text, options).map_err(|e| anyhow!("{path}: {e}"))
 }
 
 static REFERENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
@@ -83,16 +94,39 @@ pub fn expand(value: &str) -> Result<String> {
 }
 
 /// Whether a URL is on this machine: localhost, or a loopback address like
-/// 127.0.0.1 or ::1.
+/// 127.0.0.1 or ::1. It's read as the HTTP client reads it.
 pub fn is_local(url: &str) -> bool {
-    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or("");
-    let host = match host.strip_prefix('[') {
-        Some(v6) => v6.split(']').next().unwrap_or(""),
-        None => host.split(':').next().unwrap_or(""),
-    };
+    let Ok(uri) = url.parse::<Uri>() else { return false };
+    let host = uri.host().unwrap_or("");
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
     host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// How a request carries the key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Auth {
+    Bearer,
+    /// Basic, with the user "token", as Databricks takes it.
+    Basic,
+    None,
+    /// In a header of its own, like api-key.
+    Header(HeaderName),
+}
+
+impl std::str::FromStr for Auth {
+    type Err = anyhow::Error;
+
+    fn from_str(text: &str) -> Result<Auth> {
+        Ok(match text {
+            "bearer" => Auth::Bearer,
+            "basic" => Auth::Basic,
+            "none" => Auth::None,
+            _ => match text.strip_prefix("header:").and_then(|name| HeaderName::from_bytes(name.as_bytes()).ok()) {
+                Some(name) => Auth::Header(name),
+                None => bail!("auth is bearer, basic, none, or header:<name>, not {text}"),
+            },
+        })
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -189,7 +223,7 @@ pub struct Endpoint {
     pub api_base: Option<String>,
     pub path: String,
     pub protocol: Protocol,
-    pub auth: String,
+    pub auth: Auth,
     pub api_key_env: Option<String>,
     pub headers: BTreeMap<String, String>,
     pub provider_options: Map<String, Value>,
@@ -238,7 +272,7 @@ impl Endpoint {
                 n => Ok(n),
             }
         };
-        let auth = settings.auth.or_else(|| from_preset(|p| &p.auth)).unwrap_or_else(|| "bearer".into());
+        let auth: Auth = settings.auth.or_else(|| from_preset(|p| &p.auth)).as_deref().unwrap_or("bearer").parse()?;
         // A preset's key goes only to the preset's own address, and its
         // answers are cached apart from those of anything else.
         let moved = settings.api_base.is_some() && settings.api_base != from_preset(|p| &p.api_base);
@@ -259,8 +293,8 @@ impl Endpoint {
             let options = Value::Object(settings.provider_options.clone());
             format!("{own_label} {path} {protocol:?} {options} {:?}", settings.headers)
         };
-        if !(["bearer", "basic", "none"].contains(&auth.as_str()) || auth.starts_with("header:")) {
-            bail!("auth is bearer, basic, none, or header:<name>, not {auth}");
+        if price_per_million.is_some_and(|p| !(p.is_finite() && p >= 0.0)) {
+            bail!("models: price_per_million must be a number, 0 or more");
         }
         Ok(Endpoint {
             api_base,
@@ -350,7 +384,7 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(custom.label(), "custom:decider");
-        assert_eq!((custom.protocol, custom.auth.as_str(), custom.batch_size), (Protocol::Decisions, "none", 8));
+        assert_eq!((custom.protocol, &custom.auth, custom.batch_size), (Protocol::Decisions, &Auth::None, 8));
         assert_eq!(custom.price_per_million, Some(0.5));
     }
 
@@ -359,8 +393,8 @@ mod tests {
         let endpoint = |entry| Endpoint::new(entry).unwrap();
         let openai = endpoint(json!({"provider": "openai"}));
         assert_eq!(
-            (openai.protocol, openai.path.as_str(), openai.auth.as_str()),
-            (Protocol::Decisions, "/v1/decisions", "bearer")
+            (openai.protocol, openai.path.as_str(), &openai.auth),
+            (Protocol::Decisions, "/v1/decisions", &Auth::Bearer)
         );
 
         // Perplexity takes System One bodies at /v1/decisions.
@@ -380,9 +414,17 @@ mod tests {
 
     #[test]
     fn rejects_unknown_keys_and_bad_values() {
-        for yaml in
-            ["provider: typesafe\n", "threshold: high\n", "threshold: 2\n", "models: []\n", "models: [{modle: x}]\n"]
-        {
+        for yaml in [
+            "provider: typesafe\n",
+            "threshold: high\n",
+            "threshold: 2\n",
+            "models: []\n",
+            "models: [{modle: x}]\n",
+            "models: [{auth: sideways}]\n",
+            "models: [{auth: \"header:\"}]\n",
+            "models: [{auth: \"header:two words\"}]\n",
+            "models: [{price_per_million: -1}]\n",
+        ] {
             assert!(load(yaml, None).is_err(), "{yaml}");
         }
     }

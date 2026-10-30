@@ -38,14 +38,15 @@ impl Answer {
         }
     }
 
-    /// A cached answer, if it fits the question and every value is a probability.
+    /// A cached answer, if it fits the question as one from the model
+    /// would: every value a probability, and a choice's adding up to one.
     pub fn from_cached(question: &Question, values: Vec<f64>) -> Option<Answer> {
         if !values.iter().all(|&v| probability(v).is_some()) {
             return None;
         }
         match (question.choice, values.as_slice()) {
             (false, [p]) => Some(Answer::Yes(*p)),
-            (true, _) if values.len() == question.options.len() => Some(Answer::Choice(values)),
+            (true, _) if values.len() == question.options.len() && adds_up(&values) => Some(Answer::Choice(values)),
             _ => None,
         }
     }
@@ -212,10 +213,15 @@ fn choice(answer: Option<&Value>, probabilities: Option<Value>, question: &Quest
         })
         .collect::<Option<Vec<f64>>>()
         .ok_or_else(malformed)?;
-    if !(0.95..=1.05).contains(&values.iter().sum::<f64>()) {
+    if !adds_up(&values) {
         return Err(malformed());
     }
     Ok(Some(Answer::Choice(values)))
+}
+
+/// A choice's probabilities add up to one, give or take rounding.
+fn adds_up(values: &[f64]) -> bool {
+    (0.95..=1.05).contains(&values.iter().sum::<f64>())
 }
 
 /// +value+ as a probability: a number from 0 to 1, give or take rounding.
@@ -340,5 +346,7 @@ mod tests {
         assert!(choice(json!({"breaks": 0.2, "follows": 0.2})).is_err());
         assert!(choice(json!({"breaks": "x", "follows": 1.0})).is_err());
         assert!(choice(json!({"breaks": 0.25, "follows": 0.75})).is_ok(), "a left-out option has no chance");
+        assert!(Answer::from_cached(&smell, vec![0.2, 0.2, 0.0]).is_none(), "a cached one too");
+        assert!(Answer::from_cached(&smell, vec![0.2, 0.8, 0.0]).is_some());
     }
 }

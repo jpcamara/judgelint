@@ -2,6 +2,9 @@
 //! rule is a question that a System One decision model answers with a
 //! probability.
 
+#[cfg(not(unix))]
+compile_error!("judgelint builds on macOS and Linux only");
+
 mod cache;
 mod changes;
 mod cli;
