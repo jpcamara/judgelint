@@ -154,7 +154,7 @@ impl App {
         // A pull request is checked against its base branch's rules, config
         // and cache, so it can't change what it's checked against.
         let trusted = match (&base, change.pr) {
-            (Some(base), true) => Some(Commit::new(base)?),
+            (Some(base), true) => Some(Commit::new(Path::new("."), base)?),
             _ => None,
         };
         let loading = self.load_cache_early(trusted.as_ref());
@@ -401,10 +401,13 @@ fn check_paths(project: &Project, rules: &[Rule], paths: &[String], changes: Opt
             None => found,
         });
     }
+    // Every changed path but a deleted one or a directory, like a submodule:
+    // one that isn't a file to read, like a link to nothing, can't be judged,
+    // which fails the run rather than passing it.
     if let Some(changes) = changes {
         let mut changed: Vec<String> = changes
             .iter()
-            .filter(|(path, change)| **change != Changed::Deleted && project.is_file(path))
+            .filter(|(path, change)| **change != Changed::Deleted && !project.is_real_directory(path))
             .map(|(path, _)| path.clone())
             .collect();
         changed.sort_unstable();
@@ -435,4 +438,29 @@ fn check_directories(project: &Project, rules: &[Rule], paths: &[String]) -> Res
     let within = |inner: &str, outer: &str| inner.strip_prefix(outer).is_some_and(|rest| rest.starts_with('/'));
     directories.retain(|dir| named.iter().any(|path| path == dir || within(path, dir) || within(dir, path)));
     Ok(directories)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::TempDir;
+
+    #[test]
+    fn a_change_keeps_every_changed_path_but_deletions_and_directories() {
+        let dir = TempDir::new();
+        dir.write("app/a.rb", "x\n");
+        dir.write("vendor/sub/x.rb", "x\n");
+        std::os::unix::fs::symlink("nowhere.rb", dir.path("app/link.rb")).unwrap();
+        let project = dir.project();
+        let changes: Changes = [
+            ("app/a.rb", Changed::All),
+            ("app/link.rb", Changed::All),
+            ("app/gone.rb", Changed::Deleted),
+            ("vendor/sub", Changed::All),
+        ]
+        .into_iter()
+        .map(|(path, change)| (path.to_string(), change))
+        .collect();
+        assert_eq!(check_paths(&project, &[], &[], Some(&changes)).unwrap(), ["app/a.rb", "app/link.rb"]);
+    }
 }

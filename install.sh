@@ -70,8 +70,12 @@ case "$version" in
   v0.1.* | v0.2.0) ;;
   *)
     if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-      gh attestation verify "$tmp/$asset" --repo "$repo" >/dev/null ||
-        fail "$asset wasn't built by $repo's release workflow"
+      # Built by the release workflow, from this release's tag.
+      tag="$version"
+      [ "$tag" = latest ] && tag="$(gh release view --repo "$repo" --json tagName --jq .tagName)"
+      gh attestation verify "$tmp/$asset" --repo "$repo" --source-ref "refs/tags/$tag" \
+        --signer-workflow "$repo/.github/workflows/native.yml" >/dev/null ||
+        fail "$asset wasn't built by $repo's release workflow from $tag"
     fi
     ;;
 esac

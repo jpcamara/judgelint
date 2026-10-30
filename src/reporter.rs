@@ -195,7 +195,7 @@ impl<'a> Reporter<'a> {
             let right = group.iter().filter(|e| e.correct()).count();
             let tone = if right == group.len() { paint::GREEN } else { paint::RED };
             let tally = self.paint.call(&format!("{right}/{}", group.len()), tone);
-            writeln!(self.out, "{}  {tally}", self.paint.call(&self.rules[rule].id, paint::BOLD))?;
+            writeln!(self.out, "{}  {tally}", self.paint.call(&paint::clean(&self.rules[rule].id), paint::BOLD))?;
             for example in group {
                 let mark = if example.correct() {
                     self.cell("ok", 4, paint::GREEN)
@@ -246,7 +246,7 @@ impl<'a> Reporter<'a> {
         let tone = self.tone(verdict);
         [
             self.cell(&format!("{mark} {label}"), 12, tone),
-            self.cell(&rule.id, width, paint::DIM),
+            self.cell(&paint::clean(&rule.id), width, paint::DIM),
             format!(" {}", self.cell(&range(verdict), places, paint::CYAN)),
             format!("{} ", self.paint.call(&probability(verdict), tone)),
             paint::clean(&rule.message).into_owned(),

@@ -3,7 +3,7 @@
 //! about, so it can't block new work.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 
@@ -58,9 +58,21 @@ pub fn since(reference: &str, committed: bool) -> Result<Changes> {
         .concat(),
     )?;
     let mut changed = parse_diff(&diff);
-    // A changed file with no lines in the diff, like one .gitattributes
-    // marks binary, is changed throughout.
     let names = git_text(&[&["diff", "--name-status", "-z"][..], &options, compared].concat())?;
+    add_names(&mut changed, &names);
+    if !committed {
+        let new = git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?;
+        for path in new.split('\0').filter(|p| !p.is_empty()) {
+            changed.insert(path.to_string(), Changed::All);
+        }
+    }
+    Ok(changed)
+}
+
+/// Adds what `git diff --name-status -z` lists: a deleted file as deleted,
+/// and a changed one with no lines in the diff, like one .gitattributes
+/// marks binary, as changed throughout.
+fn add_names(changed: &mut Changes, names: &str) {
     let mut names = names.split('\0');
     while let (Some(status), Some(path)) = (names.next(), names.next()) {
         if status == "D" {
@@ -69,13 +81,6 @@ pub fn since(reference: &str, committed: bool) -> Result<Changes> {
             changed.entry(path.to_string()).or_insert(Changed::All);
         }
     }
-    if !committed {
-        let new = git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?;
-        for path in new.split('\0').filter(|p| !p.is_empty()) {
-            changed.insert(path.to_string(), Changed::All);
-        }
-    }
-    Ok(changed)
 }
 
 /// The pull request's base branch, fetched, as origin/<branch>: from
@@ -188,42 +193,57 @@ fn check_ref(reference: &str) -> Result<()> {
 
 /// A commit's files, read from git rather than the working tree: the base
 /// branch a pull request is checked against, whose rules, config and cache
-/// the pull request can't change.
+/// the pull request can't change, or the pull request's own commit.
 #[derive(Clone)]
 pub struct Commit {
     pub reference: String,
+    /// Where git runs; the paths are relative to it.
+    dir: PathBuf,
     /// Regular files under the working directory, as paths relative to it, sorted.
     files: Vec<String>,
 }
 
 impl Commit {
-    pub fn new(reference: &str) -> Result<Commit> {
+    pub fn new(dir: &Path, reference: &str) -> Result<Commit> {
         check_ref(reference)?;
-        let listing = git::run(Path::new("."), &["ls-tree", "-r", "-z", reference])?;
+        let listing = git::run(dir, &["ls-tree", "-r", "-z", reference])?;
         let mut files: Vec<String> = listing
             .split(|&b| b == 0)
             .filter_map(|entry| {
-                // A name that isn't UTF-8 can't be a spec, the config or the cache.
+                // A name that isn't UTF-8 isn't one of the project's files.
                 let (meta, path) = std::str::from_utf8(entry).ok()?.split_once('\t')?;
                 // Plain and executable files; not links or submodules.
                 (meta.starts_with("100644 blob") || meta.starts_with("100755 blob")).then(|| path.to_string())
             })
             .collect();
         files.sort_unstable();
-        Ok(Commit { reference: reference.to_string(), files })
+        Ok(Commit { reference: reference.to_string(), dir: dir.to_path_buf(), files })
     }
 
     pub fn files(&self) -> &[String] {
         &self.files
     }
 
+    fn has(&self, path: &str) -> bool {
+        self.files.binary_search_by(|f| f.as_str().cmp(path)).is_ok()
+    }
+
+    /// A file's size at the commit, or None when it has no such file.
+    pub fn size(&self, path: &str) -> Result<Option<u64>> {
+        if !self.has(path) {
+            return Ok(None);
+        }
+        let size = git::run(&self.dir, &["cat-file", "-s", &format!("{}:./{path}", self.reference)])?;
+        Ok(Some(String::from_utf8_lossy(&size).trim().parse()?))
+    }
+
     /// A file's contents at the commit, or None when it has no such file.
     pub fn read(&self, path: &str) -> Result<Option<Vec<u8>>> {
         let path = path.strip_prefix("./").unwrap_or(path);
-        if self.files.binary_search_by(|f| f.as_str().cmp(path)).is_err() {
+        if !self.has(path) {
             return Ok(None);
         }
-        git::run(Path::new("."), &["cat-file", "blob", &format!("{}:./{path}", self.reference)]).map(Some)
+        git::run(&self.dir, &["cat-file", "blob", &format!("{}:./{path}", self.reference)]).map(Some)
     }
 
     pub fn read_text(&self, path: &str) -> Result<String> {
@@ -328,5 +348,14 @@ mod tests {
     fn quoted_paths() {
         let diff = "+++ \"b/tab\\there \\\"q\\\" \\303\\251.rb\"\n@@ -0,0 +1 @@\n+x\n";
         assert_eq!(parse_diff(diff).keys().collect::<Vec<_>>(), ["tab\there \"q\" \u{e9}.rb"]);
+    }
+
+    #[test]
+    fn deleted_files_and_files_with_no_lines_in_the_diff() {
+        let mut changed = parse_diff("+++ b/a.rb\n@@ -1 +1 @@\n-x\n+y\n");
+        add_names(&mut changed, "M\0a.rb\0D\0gone.rb\0M\0image.png\0");
+        assert_eq!(changed["a.rb"], Changed::Lines(vec![1]), "the diff's lines stay");
+        assert_eq!(changed["gone.rb"], Changed::Deleted);
+        assert_eq!(changed["image.png"], Changed::All);
     }
 }

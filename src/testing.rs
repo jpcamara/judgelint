@@ -29,6 +29,25 @@ impl TempDir {
         self.0.join(relative).to_string_lossy().into_owned()
     }
 
+    /// Runs git in the directory.
+    pub fn git(&self, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(&self.0)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// Makes the directory a git repository and commits what's in it.
+    pub fn commit_all(&self) {
+        self.git(&["init", "-q", "-b", "main"]);
+        self.git(&["add", "-A"]);
+        self.git(&["commit", "-qm", "start"]);
+    }
+
     /// Writes a file, and returns its absolute path.
     pub fn write(&self, relative: &str, content: &str) -> String {
         let path = self.path(relative);

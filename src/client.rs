@@ -14,7 +14,7 @@ use ureq::http::{HeaderName, HeaderValue, Uri};
 
 use crate::config::{self, Auth, Endpoint, RETRIES, TIMEOUT};
 use crate::protocol::{Answer, Protocol};
-use crate::question::Question;
+use crate::question::{Question, sha256_hex};
 use crate::usage::Usage;
 
 const RETRY_STATUSES: [u16; 7] = [408, 429, 500, 502, 503, 504, 529];
@@ -98,8 +98,9 @@ impl Client {
     }
 
     /// What the model's answers are cached under. Asked any way but the
-    /// preset's, that includes the address ${VAR}s resolve to, so a variable
-    /// pointing somewhere else asks again.
+    /// preset's, that includes the address and headers ${VAR}s resolve to,
+    /// the headers as a digest, so a variable pointing somewhere else asks
+    /// again.
     pub fn cache_label(&self) -> Result<&str> {
         if let Some(label) = self.cache_label.get() {
             return Ok(label);
@@ -107,7 +108,14 @@ impl Client {
         let label = if self.endpoint.as_preset {
             self.endpoint.cache_label.clone()
         } else {
-            format!("{} {}", self.endpoint.cache_label, self.url()?)
+            let headers: Vec<(&String, String)> = self
+                .endpoint
+                .headers
+                .iter()
+                .map(|(name, value)| Ok((name, config::expand(value)?)))
+                .collect::<Result<_>>()?;
+            let headers = sha256_hex(&serde_json::to_vec(&headers)?);
+            format!("{} {} {headers}", self.endpoint.cache_label, self.url()?)
         };
         Ok(self.cache_label.get_or_init(|| label))
     }
@@ -369,5 +377,30 @@ mod tests {
         assert!(refuse_plain_http("http://127.example.com/v1", "x").is_err());
         let error = refuse_plain_http("http://api.example.com/key-123", "http://api.example.com/${KEY}").unwrap_err();
         assert!(error.to_string().contains("${KEY}") && !error.to_string().contains("key-123"), "{error}");
+    }
+
+    #[test]
+    fn the_key_header_is_sensitive_and_an_unset_variable_is_an_error() {
+        let headers = |entry: Value| client(entry).unwrap().headers();
+        let base = json!({"api_base": "https://judge.example", "model": "m", "api_key_env": "HOME"});
+        let bearer = headers(base.clone()).unwrap();
+        assert_eq!(bearer[0].0, AUTHORIZATION);
+        assert!(bearer[0].1.is_sensitive());
+        let mut named = base.clone();
+        named["auth"] = json!("header:api-key");
+        assert_eq!(headers(named).unwrap()[0].0.as_str(), "api-key");
+        let mut unset = base;
+        unset["headers"] = json!({"X-Backend": "${JUDGELINT_TEST_UNSET}"});
+        let error = headers(unset).unwrap_err().to_string();
+        assert!(error.contains("Set JUDGELINT_TEST_UNSET"), "{error}");
+    }
+
+    #[test]
+    fn a_custom_endpoint_is_cached_by_where_and_how_it_is_asked() {
+        let label = |entry: Value| client(entry).unwrap().cache_label().unwrap().to_string();
+        let custom = |headers: Value| json!({"api_base": "https://judge.example", "model": "m", "headers": headers});
+        assert_eq!(label(json!("typesafe")), "typesafe/jev-latest", "a preset by its model alone");
+        assert!(label(custom(json!({}))).contains("https://judge.example/v1/systemone"));
+        assert_ne!(label(custom(json!({"X-Backend": "a"}))), label(custom(json!({"X-Backend": "b"}))));
     }
 }

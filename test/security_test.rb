@@ -382,6 +382,51 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_header_variable_pointing_elsewhere_asks_again
+    in_smelly_project do
+      model = { "provider" => "custom", "model" => "m", "auth" => "none", "headers" => { "X-Backend" => "${JUDGELINT_BACKEND}" } }
+      %w[a b].each do |backend|
+        status, _out, err = judgelint("app/bad.rb", model: model, env: { "JUDGELINT_BACKEND" => backend }, cache: true)
+        assert_equal 1, status, err
+      end
+
+      assert_equal %w[a b], @server.requests.map { |r| r[:headers]["x-backend"] }
+    end
+  end
+
+  def test_a_changed_link_to_nothing_fails_a_change_check
+    in_smelly_project do
+      git_repo
+      File.symlink("missing.rb", "app/gone.rb")
+      status, out, err = judgelint("--base", "main")
+
+      assert_equal 1, status, err
+      assert_match(%r{skipped app/gone\.rb doesn't lead to a file}, err)
+      assert_match(/1 skipped/, out)
+    end
+  end
+
+  def test_pr_judges_a_changed_file_as_committed
+    in_smelly_project do |dir|
+      write_config
+      git_repo
+      git("init", "--bare", "-q", "#{dir}/origin.git")
+      git("remote", "add", "origin", "#{dir}/origin.git")
+      git("push", "-q", "origin", "main")
+      git("checkout", "-q", "-b", "change")
+      write("app/new.rb", "SMELL\n")
+      git("add", "-A")
+      git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "change")
+      # A step before the check writes over it.
+      write("app/new.rb", "fine\n")
+      out, err, status = Open3.capture3({ "JUDGELINT_TEST_KEY" => "secret", "GITHUB_BASE_REF" => "main" },
+                                        BINARY, "--pr")
+
+      assert_equal 1, status.exitstatus, err
+      assert_match(/^1 file, 1 violations$/, out)
+    end
+  end
+
   def test_a_variable_pointing_elsewhere_asks_again
     other = StubSystemOne.new
     in_smelly_project do
@@ -405,6 +450,19 @@ class SecurityTest < Minitest::Test
 
       assert_equal 2, status
       assert_match(/custom:m, which has no price.*--yes/, err)
+    end
+  end
+
+  def test_a_failing_request_stops_the_rest_of_its_files_requests
+    @server.stop
+    @server = StubSystemOne.new(status: 400, body: "{}")
+    in_project do
+      write_rule("smell")
+      write("app/long.rb", "fine\n" * 3000)
+      status, _out, err = judgelint(model: { "batch_size" => 1 })
+
+      assert_equal 2, status, err
+      assert_operator @server.requests.size, :<, 75, "75 windows, a request each"
     end
   end
 
@@ -457,13 +515,25 @@ class SecurityTest < Minitest::Test
 
   def test_an_endpoints_error_cant_forge_a_line_of_output
     @server.stop
-    @server = StubSystemOne.new(status: 400, body: JSON.generate({ "detail" => "bad\n::error::forged\e[31m" }))
+    @server = StubSystemOne.new(status: 400, body: JSON.generate({ "detail" => "bad\n::error::forged\e[31m ##[error]x" }))
     in_smelly_project do
       status, _out, err = judgelint("app/bad.rb")
 
       assert_equal 2, status
-      assert_includes err, "bad\\n::error::forged\\u{1b}[31m"
+      assert_includes err, 'bad\n::error::forged\u{1b}[31m ##\[error]x'
       refute_match(/^::error/, err)
+    end
+  end
+
+  def test_a_file_name_cant_be_a_workflow_command
+    in_project do
+      write(".judgelint/rules/any.md", "---\nquestion: Does this code smell?\npaths: [\"**/*.rb\"]\n---\nAnything.\n")
+      write("::error::forged.rb", "SMELL\n")
+      status, out, err = judgelint
+
+      assert_equal 1, status, err
+      assert_includes out, '\::error::forged.rb'
+      refute_match(/^::/, out)
     end
   end
 
