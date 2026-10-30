@@ -7,9 +7,12 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
+use ureq::http::header::AUTHORIZATION;
+use ureq::http::{HeaderName, HeaderValue, Uri};
 
-use crate::config::{self, Endpoint, RETRIES, TIMEOUT};
+use crate::config::{self, Auth, Endpoint, RETRIES, TIMEOUT};
 use crate::protocol::{Answer, Protocol};
 use crate::question::Question;
 use crate::usage::Usage;
@@ -76,7 +79,7 @@ impl Client {
     /// Called before the first request, so a run the cache answers needs no key.
     pub fn check_key(&self) -> Result<()> {
         let env = self.endpoint.api_key_env.as_deref().unwrap_or("");
-        if self.endpoint.auth != "none" && !env.is_empty() && self.endpoint.api_key().is_none() {
+        if self.endpoint.auth != Auth::None && !env.is_empty() && self.endpoint.api_key().is_none() {
             bail!("Set {env} to your {} API key", self.endpoint.provider);
         }
         Ok(())
@@ -128,8 +131,11 @@ impl Client {
     fn post(&self, body: &[u8]) -> Result<Value> {
         let label = self.endpoint.label();
         let url = self.url()?;
-        for attempt in 1.. {
-            let failure = match self.send(url, body) {
+        let headers = self.headers()?;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let failure = match self.send(url, &headers, body) {
                 Ok((code, retry_after, response)) => {
                     if (200..300).contains(&code) {
                         return serde_json::from_slice(&response).map_err(|_| {
@@ -157,26 +163,46 @@ impl Client {
             }
             std::thread::sleep(Duration::from_secs_f64(2f64.powi(attempt as i32)));
         }
-        unreachable!("the loop returns")
+    }
+
+    /// The headers a request carries: the key, marked sensitive so it's
+    /// never logged, then the endpoint's own, with ${VAR}s filled in.
+    fn headers(&self) -> Result<Vec<(HeaderName, HeaderValue)>> {
+        let label = self.endpoint.label();
+        let auth = match (&self.endpoint.auth, self.endpoint.api_key()) {
+            (Auth::None, _) | (_, None) => None,
+            (Auth::Bearer, Some(key)) => Some((AUTHORIZATION, format!("Bearer {key}"))),
+            (Auth::Basic, Some(key)) => {
+                Some((AUTHORIZATION, format!("Basic {}", STANDARD.encode(format!("token:{key}")))))
+            }
+            (Auth::Header(name), Some(key)) => Some((name.clone(), key)),
+        };
+        let mut headers = Vec::new();
+        if let Some((name, value)) = auth {
+            let mut value = HeaderValue::from_str(&value).map_err(|_| anyhow!("{label}'s key can't go in a header"))?;
+            value.set_sensitive(true);
+            headers.push((name, value));
+        }
+        for (name, template) in &self.endpoint.headers {
+            let bad = || anyhow!("headers: {name} can't go in a request to {label}");
+            let mut value = HeaderValue::from_str(&config::expand(template)?).map_err(|_| bad())?;
+            value.set_sensitive(template.contains("${"));
+            headers.push((HeaderName::from_bytes(name.as_bytes()).map_err(|_| bad())?, value));
+        }
+        Ok(headers)
     }
 
     /// The response's status, Retry-After header, and body.
-    fn send(&self, url: &str, body: &[u8]) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
+    fn send(
+        &self,
+        url: &str,
+        headers: &[(HeaderName, HeaderValue)],
+        body: &[u8],
+    ) -> Result<(u16, Option<String>, Vec<u8>), ureq::Error> {
         let mut request =
             self.agent.post(url).header("Content-Type", "application/json").header("Accept", "application/json");
-        if let Some(key) = self.endpoint.api_key() {
-            match self.endpoint.auth.as_str() {
-                "bearer" => request = request.header("Authorization", format!("Bearer {key}")),
-                "basic" => {
-                    let token = base64::engine::general_purpose::STANDARD.encode(format!("token:{key}"));
-                    request = request.header("Authorization", format!("Basic {token}"));
-                }
-                "none" => {}
-                header => request = request.header(header.trim_start_matches("header:"), key),
-            }
-        }
-        for (name, value) in &self.endpoint.headers {
-            request = request.header(name, config::expand(value).unwrap_or_else(|_| value.clone()));
+        for (name, value) in headers {
+            request = request.header(name, value);
         }
         let mut response = request.send(body)?;
         let code = response.status().as_u16();
@@ -189,7 +215,8 @@ impl Client {
 /// Code and keys go over https, except to this machine. +shown+ is the URL
 /// as configured, for the error.
 fn refuse_plain_http(url: &str, shown: &str) -> Result<()> {
-    let plain = url.get(..7).is_some_and(|scheme| scheme.eq_ignore_ascii_case("http://"));
+    let uri: Uri = url.parse().map_err(|_| anyhow!("{shown} isn't a URL"))?;
+    let plain = uri.scheme_str().is_some_and(|scheme| scheme.eq_ignore_ascii_case("http"));
     if !plain || config::is_local(url) {
         return Ok(());
     }
