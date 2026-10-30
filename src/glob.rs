@@ -7,11 +7,13 @@
 //! doesn't follow links into directories under `**`, though a literal
 //! directory in a pattern can be a link, and a link to a file is the file.
 
-use std::fs::{self, File};
+use std::collections::HashMap;
+use std::fs::{self, File, OpenOptions};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock, mpsc};
 
 use anyhow::{Context, Result, anyhow, bail};
 use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
@@ -243,23 +245,62 @@ fn root() -> &'static Path {
     ROOT.get_or_init(|| fs::canonicalize(".").unwrap_or_else(|_| PathBuf::from(".")))
 }
 
-/// Reads a file to send to a model. Every file a model sees comes through
-/// here: a regular file inside the working directory, not reached through a
-/// link that leaves it, and, in a git repository, one git tracks or would
-/// add. Anything else is an error that says why.
-pub fn read_to_send(path: &str) -> Result<Contents> {
+/// Whether every directory down a relative path is a real one, not a link:
+/// each is checked once a run, below a parent already known to be.
+fn plain_directories(dir: &Path) -> bool {
+    static PLAIN: LazyLock<RwLock<HashMap<PathBuf, bool>>> = LazyLock::new(Default::default);
+    if dir.as_os_str().is_empty() {
+        return true;
+    }
+    if let Some(&known) = PLAIN.read().unwrap_or_else(|e| e.into_inner()).get(dir) {
+        return known;
+    }
+    let parent = dir.parent().unwrap_or(Path::new(""));
+    let plain = plain_directories(parent) && fs::symlink_metadata(dir).is_ok_and(|m| m.is_dir());
+    PLAIN.write().unwrap_or_else(|e| e.into_inner()).insert(dir.to_path_buf(), plain);
+    plain
+}
+
+/// Opens a file, without waiting on one that isn't a regular file.
+fn open(path: &Path, follow: bool) -> std::io::Result<File> {
+    let flags = libc::O_NONBLOCK | if follow { 0 } else { libc::O_NOFOLLOW };
+    OpenOptions::new().read(true).custom_flags(flags).open(path)
+}
+
+/// Opens a file to send, with its path relative to the working directory.
+/// One that leads outside it, through a link or otherwise, is an error. A
+/// plain relative path costs nothing to check; any other is resolved.
+fn open_inside(path: &str) -> Result<(File, String)> {
+    let relative = Path::new(path.strip_prefix("./").unwrap_or(path));
+    let plain = relative.components().all(|c| matches!(c, Component::Normal(_)));
+    if plain && plain_directories(relative.parent().unwrap_or(Path::new(""))) {
+        match open(relative, false) {
+            Ok(file) => return Ok((file, relative.to_string_lossy().into_owned())),
+            // The file is a link.
+            Err(e) if e.raw_os_error() == Some(libc::ELOOP) => {}
+            Err(e) => return Err(e).with_context(|| format!("Couldn't read {path}")),
+        }
+    }
     let real = fs::canonicalize(path).with_context(|| format!("Couldn't read {path}"))?;
     // Unit tests work in temporary directories outside the project; the
     // end-to-end tests cover where a file may be.
     let root = if cfg!(test) { Path::new("/") } else { root() };
     let inside = real.strip_prefix(root).map_err(|_| anyhow!("{path} is outside the project"))?;
-    if let Some(listed) = project_files().filter(|_| !cfg!(test)) {
-        let inside = inside.to_string_lossy();
-        if listed.binary_search_by(|p| p.as_str().cmp(&inside)).is_err() {
-            bail!("{path} is ignored by git");
-        }
+    let file = open(&real, true).with_context(|| format!("Couldn't read {path}"))?;
+    Ok((file, inside.to_string_lossy().into_owned()))
+}
+
+/// Reads a file to send to a model. Every file a model sees comes through
+/// here: a regular file inside the working directory, not reached through a
+/// link that leaves it, and, in a git repository, one git tracks or would
+/// add. Anything else is an error that says why.
+pub fn read_to_send(path: &str) -> Result<Contents> {
+    let (file, inside) = open_inside(path)?;
+    if let Some(listed) = project_files().filter(|_| !cfg!(test))
+        && listed.binary_search_by(|p| p.as_str().cmp(&inside)).is_err()
+    {
+        bail!("{path} is ignored by git");
     }
-    let file = File::open(&real).with_context(|| format!("Couldn't read {path}"))?;
     let metadata = file.metadata()?;
     if !metadata.is_file() {
         bail!("{path} isn't a regular file");
