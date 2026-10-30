@@ -246,44 +246,45 @@ directory when a file in it was changed, added or deleted. Only `check`
 takes `--base` and `--pr`. `--pr` checks against `JUDGELINT_BASE_BRANCH`
 when it's set, or else the base branch that GitHub Actions, GitLab,
 Buildkite, Bitbucket, Azure Pipelines or `gh` names. git needs the history
-back to the merge base.
+back to the merge base, except on GitHub Actions' own checkout (below).
 
 Under `--base` or `--pr`, a changed file judgelint can't judge fails the
 run: one too large for the model, one the model refused to answer about,
 even in part, one that leads outside the project, or a binary one. Images,
 fonts, archives and other formats that are never code are left out instead.
 
-On GitHub Actions, check out the pull request's own commit and the history
-without its file contents (git fetches the ones it needs), name the branch
-the pull request targets, and keep the cache between pushes:
+On GitHub Actions, the default checkout is enough. Keep the cache between
+pushes:
 
 ```yaml
 - uses: actions/checkout@v4
-  with:
-    ref: ${{ github.event.pull_request.head.sha }}
-    fetch-depth: 0
-    filter: blob:none
 - uses: actions/cache@v4
   with:
     path: .judgelint/cache.bin
     key: judgelint-${{ github.run_id }}
     restore-keys: judgelint-
 - run: judgelint --pr --format github
-  env:
-    JUDGELINT_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
 ```
 
-This matters for stacked pull requests. GitHub sets `GITHUB_BASE_REF` to
-the branch the whole stack targets, not the one the pull request does, and
-its default checkout merges the pull request onto the merged pull requests
-below it. Either one makes judgelint check the whole stack again. git
-fetches file contents with the checkout's credentials, so leave
-`persist-credentials` at its default.
+That checkout is the merge commit GitHub makes for the pull request, and
+`--pr` compares it with its first parent: the base branch, or for a stacked
+pull request, the merge commit of the one below it. So a stacked pull
+request is checked for its own changes, with the config of what it lands
+on. judgelint fetches that parent with the checkout's credentials, so leave
+`persist-credentials` at its default. Line numbers are the merge commit's:
+if the base branch changed lines above an edit, an annotation can sit a few
+lines from where the "Files changed" tab shows it.
+
+To check the pull request's own commit instead, check it out with
+`ref: ${{ github.event.pull_request.head.sha }}` and fetch the history
+with `fetch-depth: 0` (`filter: blob:none` skips old file contents). `--pr`
+then compares with the branch the pull request targets, read from GitHub's
+event, since `GITHUB_BASE_REF` names the branch a whole stack targets.
 
 ### Pull requests from people you don't trust
 
-`--pr` reads `.judgelint.yml` from the base branch, not from the pull
-request, so a pull request can't change where its code is sent or which
+`--pr` reads `.judgelint.yml` from the base branch, or for a stacked pull
+request from the one below it, not from the pull request, so a pull request can't change where its code is sent or which
 API key goes with it.
 
 The pull request's own specs and cache are used, so a new or changed

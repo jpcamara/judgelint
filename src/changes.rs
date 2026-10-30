@@ -83,16 +83,26 @@ fn add_names(changed: &mut Changes, names: &str) {
     }
 }
 
-/// The pull request's base branch, fetched, as origin/<branch>: from
+/// What the pull request is compared with. On GitHub Actions' own checkout
+/// of a pull request, that's the first parent of GitHub's merge commit.
+/// Otherwise it's the base branch, fetched, as origin/<branch>: from
 /// JUDGELINT_BASE_BRANCH, then GitHub Actions, GitLab, Buildkite, Bitbucket,
 /// or Azure Pipelines, then the gh CLI.
 pub fn pr_base() -> Result<String> {
-    let from_ci = BASE_BRANCH_VARIABLES.iter().find_map(|name| {
+    let named = |name: &str| {
         // Buildkite sets "false" outside a pull request; Azure names a full ref.
         let value = std::env::var(name).unwrap_or_default();
         let branch = value.strip_prefix("refs/heads/").unwrap_or(&value).to_string();
         (!branch.is_empty() && branch != "false").then_some(branch)
-    });
+    };
+    let chosen = named(BASE_BRANCH_VARIABLES[0]);
+    if chosen.is_none()
+        && let Some(parent) = github_merge_parent()?
+    {
+        return Ok(parent);
+    }
+    let from_ci =
+        chosen.or_else(github_event_base).or_else(|| BASE_BRANCH_VARIABLES[1..].iter().find_map(|n| named(n)));
     let branch = match from_ci {
         Some(branch) => branch,
         None => gh_base_branch()?,
@@ -103,6 +113,49 @@ pub fn pr_base() -> Result<String> {
     check_ref(&branch)?;
     git::run(Path::new("."), &["fetch", "--no-tags", "--quiet", "origin", &branch])?;
     Ok(format!("origin/{branch}"))
+}
+
+/// When HEAD is the merge commit GitHub made for this pull request run, its
+/// first parent: the base branch, or for a stacked pull request, the merge
+/// commit of the one below. Comparing with it gives the pull request's own
+/// changes without the history; a checkout one commit deep fetches one more.
+/// A merge the pull request committed itself isn't GitHub's: comparing with
+/// its parent would read the config from the pull request.
+fn github_merge_parent() -> Result<Option<String>> {
+    let var = |name: &str| std::env::var(name).unwrap_or_default();
+    let reference = var("GITHUB_REF");
+    let number = reference.strip_prefix("refs/pull/").and_then(|r| r.strip_suffix("/merge")).unwrap_or("");
+    if var("GITHUB_EVENT_NAME") != "pull_request" || number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return Ok(None);
+    }
+    if git_text(&["rev-parse", "HEAD"])?.trim() != var("GITHUB_SHA") {
+        return Ok(None);
+    }
+    // Read from the commit itself, since a shallow checkout lacks the parents.
+    let commit = git_text(&["cat-file", "commit", "HEAD"])?;
+    let parents: Vec<&str> =
+        commit.lines().take_while(|l| !l.is_empty()).filter_map(|l| l.strip_prefix("parent ")).collect();
+    let [first, _] = parents[..] else { return Ok(None) };
+    check_ref(first)?;
+    let present = git::command(Path::new("."))
+        .args(["cat-file", "-e", &format!("{first}^{{commit}}")])
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !present {
+        // Two deep from HEAD, so HEAD has its parents, not only the commit.
+        let head = var("GITHUB_SHA");
+        git::run(Path::new("."), &["fetch", "--no-tags", "--quiet", "--depth=2", "origin", &head])?;
+    }
+    Ok(Some(first.to_string()))
+}
+
+/// The branch a GitHub pull request targets, from its event. For a stacked
+/// pull request, GITHUB_BASE_REF is the branch the whole stack targets.
+fn github_event_base() -> Option<String> {
+    let event: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(std::env::var("GITHUB_EVENT_PATH").ok()?).ok()?).ok()?;
+    event["pull_request"]["base"]["ref"].as_str().filter(|b| !b.is_empty()).map(str::to_string)
 }
 
 /// The changed lines in `git diff -U0` output. A file's name is read only
