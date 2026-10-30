@@ -13,10 +13,16 @@ change them; raise it with the maintainer instead.
   been the design since 0.1.6. The cost is known: a new violation next to
   an older, clearer one of the same rule can pass. It was removed once on
   a review finding and had to be put back.
-  `test_a_finding_on_a_line_the_change_didnt_touch_passes` covers it.
+  The README describes it under "CI", and
+  `test_a_finding_on_a_line_the_change_didnt_touch_passes` and
+  `a_change_counts_only_the_share_of_where_on_its_lines` cover it.
 
-## Before changing behavior
+## Reviews
 
-A review finding that changes what users see, beyond fixing a crash or a
-security hole, goes to the maintainer first. Check the CHANGELOG and
-README for whether the current behavior was chosen.
+A review finding is fixed when it's a crash, a security hole, or a simpler
+way to write the same thing. A finding that would change what users see,
+or adds handling for a new case, is listed for the maintainer, not built.
+
+Before calling behavior a bug, check the README, the CHANGELOG and this
+file for whether it was chosen. If a test asserts it, assume it was. Don't
+change or delete a test to make a fix pass without saying so.

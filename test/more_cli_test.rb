@@ -46,6 +46,9 @@ class MoreCLITest < Minitest::Test
       git_repo
       runners.each do |name, run|
         # The where answer puts the finding on the window's first line, L41.
+        # Line 45 is a new smell too, and still passes: on purpose, since
+        # the model placed the finding on a line the change didn't touch.
+        # See AGENTS.md before changing this.
         git("checkout", "-q", "--", "app/a.rb")
         write("app/a.rb", (1..50).map { |n| n == 45 ? "SMELL!\n" : "SMELL\n" }.join)
         status, out, = run.call(["--base", "main", "-f", "json"])

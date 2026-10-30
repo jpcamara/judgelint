@@ -234,7 +234,10 @@ judgelint --pr --format github   # GitHub annotations on the changed lines (json
 ```
 
 These ask only about the lines that changed, with the rest of the file as
-context, so existing code doesn't block a new pull request. A new file is
+context, so existing code doesn't block a new pull request. When the model
+says the clearest violation is on a line the change didn't touch, it
+doesn't count, even if a changed line breaks the same rule less clearly.
+A new file is
 all changed lines. Rules about a whole file (`scope: file`) still read the
 whole file when any of it changed, and a directory rule asks about a
 directory when a file in it was changed, added or deleted. Only `check`
