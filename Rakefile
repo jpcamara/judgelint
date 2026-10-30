@@ -37,7 +37,9 @@ desc "Build this platform's gem, with the binary in libexec/, into pkg/"
 task "gem:native" => :build do
   mkdir_p "libexec"
   cp BINARY, "libexec/judgelint"
-  spec = Gem::Specification.load("judgelint.gemspec")
+  # A copy, since Gem::Specification.load caches the spec it returns, and the
+  # gem task, if it runs after this one, needs it unchanged.
+  spec = Gem::Specification.load("judgelint.gemspec").dup
   # arm64-darwin, not arm64-darwin-24: without the OS version, any release
   # since the one the binary was built for can install it.
   spec.platform = Gem::Platform.new([Gem::Platform.local.cpu, Gem::Platform.local.os])
