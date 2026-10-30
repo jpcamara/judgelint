@@ -253,12 +253,14 @@ run: one too large for the model, one the model refused to answer about,
 even in part, one that leads outside the project, or a binary one. Images,
 fonts, archives and other formats that are never code are left out instead.
 
-On GitHub Actions, check out the history without its file contents (git
-fetches the ones it needs), and keep the cache between pushes:
+On GitHub Actions, check out the pull request's own commit and the history
+without its file contents (git fetches the ones it needs), name the branch
+the pull request targets, and keep the cache between pushes:
 
 ```yaml
 - uses: actions/checkout@v4
   with:
+    ref: ${{ github.event.pull_request.head.sha }}
     fetch-depth: 0
     filter: blob:none
 - uses: actions/cache@v4
@@ -267,14 +269,16 @@ fetches the ones it needs), and keep the cache between pushes:
     key: judgelint-${{ github.run_id }}
     restore-keys: judgelint-
 - run: judgelint --pr --format github
+  env:
+    JUDGELINT_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
 ```
 
-A stacked pull request that targets its parent branch on GitHub needs
-nothing more. If it targets the main branch instead, set
-`JUDGELINT_BASE_BRANCH` to the parent branch and check out the pull
-request's own commit with `ref: ${{ github.event.pull_request.head.sha }}`.
-GitHub's default checkout merges the pull request into the branch it
-targets, which brings in commits the parent branch doesn't have yet.
+This matters for stacked pull requests. GitHub sets `GITHUB_BASE_REF` to
+the branch the whole stack targets, not the one the pull request does, and
+its default checkout merges the pull request onto the merged pull requests
+below it. Either one makes judgelint check the whole stack again. git
+fetches file contents with the checkout's credentials, so leave
+`persist-credentials` at its default.
 
 ### Pull requests from people you don't trust
 
