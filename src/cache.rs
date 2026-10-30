@@ -110,14 +110,16 @@ impl Cache {
     }
 }
 
-/// A cache that's a link could write anywhere it points.
+/// A cache that's a link, or in a directory that's one, could write
+/// anywhere it points.
 fn refuse_link(path: &str) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            bail!("{path} is a link; judgelint keeps its cache in a plain file")
+    let path = std::path::Path::new(path);
+    for link in [Some(path), path.parent()].into_iter().flatten().filter(|p| !p.as_os_str().is_empty()) {
+        if fs::symlink_metadata(link).is_ok_and(|m| m.file_type().is_symlink()) {
+            bail!("{} is a link; judgelint keeps its cache in a plain file and directory", link.display());
         }
-        _ => Ok(()),
     }
+    Ok(())
 }
 
 /// The keys in a cache file, sorted, with the latest of any key stored twice,
@@ -287,5 +289,8 @@ mod tests {
         let path = dir.path("cache.bin");
         std::os::unix::fs::symlink(&target, &path).unwrap();
         assert!(Cache::open(Some(&path)).err().unwrap().to_string().contains("is a link"));
+        let linked = dir.path("linked");
+        std::os::unix::fs::symlink(dir.path(""), &linked).unwrap();
+        assert!(Cache::open(Some(&format!("{linked}/cache.bin"))).err().unwrap().to_string().contains("is a link"));
     }
 }
