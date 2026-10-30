@@ -231,6 +231,89 @@ class SecurityTest < Minitest::Test
     end
   end
 
+  def test_a_changed_file_with_a_nul_byte_fails_a_change_check
+    in_smelly_project do
+      git_repo
+      write("app/sneaky.rb", "# \0\nSMELL\n")
+      status, out, err = judgelint("--base", "main")
+
+      assert_equal 1, status, err
+      assert_match(/skipped app\/sneaky\.rb is binary/, err)
+      assert_match(/1 skipped/, out)
+      assert_empty @server.requests
+    end
+  end
+
+  def test_a_changed_image_is_left_out
+    in_project do
+      write(".judgelint/rules/any.md", "---\nquestion: Does this code smell?\npaths: [\"app/**/*\"]\n---\nAnything.\n")
+      write("app/a.rb", "fine\n")
+      git_repo
+      File.binwrite("app/logo.png", "\x89PNG\r\n\x1a\n\0\0\0\rIHDR")
+      status, out, err = judgelint("--base", "main")
+
+      assert_equal 0, status, err
+      assert_match(/^0 files, 0 violations$/, out)
+    end
+  end
+
+  def test_a_window_the_model_refuses_leaves_the_rule_refused
+    @server.stop
+    @server = StubSystemOne.new { |_state, key| key.end_with?("41-80") ? nil : 0.1 }
+    in_project do
+      write_rule("smell")
+      write("app/a.rb", "fine\n" * 80)
+      git_repo
+      File.write("app/a.rb", "changed\n" * 80)
+      status, out, err = judgelint("--base", "main")
+
+      assert_equal 1, status, err
+      assert_match(/1 refused/, out)
+      assert_match(/were skipped or refused, so the run fails/, err)
+    end
+  end
+
+  def test_deleting_a_file_asks_about_its_directory
+    in_project do
+      write(".judgelint/rules/cohesive.md", "---\nquestion: Do these files fail to hang together?\nscope: directory\n" \
+                                            "paths: [\"app/features/*\"]\n---\nOne capability per feature.\n")
+      write("app/features/a/index.rb", "fine\n")
+      write("app/features/a/helper.rb", "fine\n")
+      git_repo
+      File.delete("app/features/a/helper.rb")
+      judgelint("--base", "main")
+
+      assert_equal 1, @server.requests.size
+    end
+  end
+
+  def test_an_empty_file_is_still_asked_about
+    in_project do
+      write_rule("exports", question: "Does this file export something?", extra: "fail_when: no")
+      git_repo
+      write("app/empty.rb", "")
+      status, = judgelint("--base", "main")
+
+      assert_equal 1, status
+      assert_equal 1, @server.requests.size
+    end
+  end
+
+  def test_a_new_violation_next_to_an_old_one_still_fails
+    in_project do
+      write("CONVENTIONS.md", "- **No smells.**\n")
+      write("app/a.rb", "SMELL\n#{"fine\n" * 9}")
+      git_repo
+      lines = File.readlines("app/a.rb")
+      lines[5] = "SMELL again\n"
+      File.write("app/a.rb", lines.join)
+      status, out, = judgelint("--base", "main")
+
+      assert_equal 1, status
+      assert_match(/1 violations/, out)
+    end
+  end
+
   def test_a_file_gitattributes_marks_binary_is_still_checked_when_changed
     in_smelly_project do
       write(".gitattributes", "*.rb -diff\n")

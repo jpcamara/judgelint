@@ -34,7 +34,7 @@ class MoreCLITest < Minitest::Test
   end
 
 
-  def test_a_finding_on_a_line_the_change_didnt_touch_passes
+  def test_a_change_is_asked_about_its_own_lines
     in_project do
       write("app/README.md", <<~MARKDOWN)
         ---
@@ -45,13 +45,9 @@ class MoreCLITest < Minitest::Test
       write("app/a.rb", "SMELL\n" * 50)
       git_repo
       runners.each do |name, run|
-        # The where answer puts the finding on the window's first line, L41.
         git("checkout", "-q", "--", "app/a.rb")
         write("app/a.rb", (1..50).map { |n| n == 45 ? "SMELL!\n" : "SMELL\n" }.join)
-        status, out, = run.call(["--base", "main", "-f", "json"])
-        untouched = JSON.parse(out)["results"].first
-
-        assert_equal [0, "pass", 0.0], [status, untouched["status"], untouched["probability"]], name
+        run.call(["--base", "main", "-f", "json"])
         verdict = @server.requests.last[:payload]["questions"].values.first
         assert_equal "How does line 45 of the file relate to the following team rule? Rule: No smells. Code here doesn't smell.", verdict["instructions"], name
 

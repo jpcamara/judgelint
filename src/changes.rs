@@ -12,11 +12,13 @@ use regex::Regex;
 
 use crate::git;
 
-/// The lines changed in a file, or all of it for a new file.
+/// The lines changed in a file, all of it for a new file, or a file deleted,
+/// which a rule about its directory still asks about.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Changed {
     All,
     Lines(Vec<u32>),
+    Deleted,
 }
 
 pub type Changes = HashMap<String, Changed>;
@@ -44,10 +46,13 @@ pub fn since(reference: &str, committed: bool) -> Result<Changes> {
     check_ref(reference)?;
     let base = git_text(&["merge-base", reference, "HEAD"])?;
     let compared: &[&str] = if committed { &[base.trim(), "HEAD"] } else { &[base.trim()] };
+    // A move is a deletion and an addition, and the prefixes are set, since
+    // a user's config can change both. No configured filter runs.
+    let options = ["--no-renames", "--relative", "--no-ext-diff", "--no-textconv"];
     let diff = git_text(
         &[
-            // No configured filter runs.
-            &["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--relative", "--diff-filter=d"],
+            &["diff", "-U0", "--no-color", "--src-prefix=a/", "--dst-prefix=b/", "--diff-filter=d"][..],
+            &options,
             compared,
         ]
         .concat(),
@@ -55,9 +60,14 @@ pub fn since(reference: &str, committed: bool) -> Result<Changes> {
     let mut changed = parse_diff(&diff);
     // A changed file with no lines in the diff, like one .gitattributes
     // marks binary, is changed throughout.
-    let names = git_text(&[&["diff", "--name-only", "-z", "--relative", "--diff-filter=d"], compared].concat())?;
-    for path in names.split('\0').filter(|p| !p.is_empty()) {
-        changed.entry(path.to_string()).or_insert(Changed::All);
+    let names = git_text(&[&["diff", "--name-status", "-z"][..], &options, compared].concat())?;
+    let mut names = names.split('\0');
+    while let (Some(status), Some(path)) = (names.next(), names.next()) {
+        if status == "D" {
+            changed.insert(path.to_string(), Changed::Deleted);
+        } else {
+            changed.entry(path.to_string()).or_insert(Changed::All);
+        }
     }
     if !committed {
         let new = git_text(&["ls-files", "-z", "--others", "--exclude-standard"])?;

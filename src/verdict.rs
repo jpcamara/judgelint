@@ -1,8 +1,9 @@
 //! One rule's outcome for one file.
 //!
 //! +status+ is Violation (at or above the rule's threshold), Uncertain
-//! (between warn_at and the threshold), Pass, Skipped (the file is too large
-//! to judge), Refused (the model declined the question), or Excused (a
+//! (between warn_at and the threshold), Pass, Skipped (the file can't be
+//! sent: too large, or, in a change, binary or outside the project), Refused
+//! (the model declined a question the verdict needed), or Excused (a
 //! violation or uncertain, but a judgehint excuses it). +lines+ is the
 //! [first, last] range the verdict came from. +line+ is the line in it that
 //! breaks the rule, and +file+ the file in a directory, when the model could

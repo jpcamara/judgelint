@@ -237,15 +237,10 @@ impl Rule {
         Ok(dirs)
     }
 
-    /// The ranges to ask about: windows of +size+ lines, or the whole file.
+    /// The ranges to ask about: windows of +size+ lines, or the whole file
+    /// or directory, even an empty one, which can still break a rule.
     pub fn ranges(&self, source: &Source, size: u32) -> Vec<(u32, u32)> {
-        if self.is_window() {
-            source.windows(size)
-        } else if source.line_count == 0 {
-            Vec::new()
-        } else {
-            vec![(1, source.line_count)]
-        }
+        if self.is_window() { source.windows(size) } else { vec![(1, source.line_count.max(1))] }
     }
 
     pub fn violation_probability(&self, yes: f64) -> f64 {

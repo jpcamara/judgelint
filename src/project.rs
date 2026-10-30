@@ -60,6 +60,33 @@ pub enum Contents {
     Excluded(String),
 }
 
+impl Contents {
+    /// Why a file that isn't text can't be sent.
+    pub fn why(&self, path: &str) -> String {
+        match self {
+            Contents::Text(_) => String::new(),
+            Contents::TooLarge => format!("{path} is over {} MB", MAX_FILE_BYTES >> 20),
+            Contents::Binary => format!("{path} is binary"),
+            Contents::Ignored => format!("{path} isn't one of the project's files"),
+            Contents::Excluded(why) => why.clone(),
+        }
+    }
+}
+
+/// Formats that are never code. Checking a change, a binary file in one is
+/// left out; any other binary file can't be judged, since a NUL byte would
+/// otherwise hide code.
+const BINARY_FORMATS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "ico", "bmp", "tif", "tiff", "avif", "heic", "psd", "woff", "woff2", "ttf",
+    "otf", "eot", "zip", "gz", "tgz", "bz2", "xz", "zst", "7z", "rar", "jar", "pdf", "mp3", "mp4", "m4a", "wav", "ogg",
+    "webm", "mov", "avi", "flac", "wasm", "so", "dylib", "dll", "exe", "o", "a", "class", "pyc", "sqlite",
+];
+
+pub fn binary_format(path: &str) -> bool {
+    let extension = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("");
+    BINARY_FORMATS.iter().any(|format| extension.eq_ignore_ascii_case(format))
+}
+
 pub struct Project {
     /// The directory, resolved, which every file sent must be inside.
     root: PathBuf,
@@ -269,10 +296,7 @@ impl Project {
     pub fn read_text(&self, path: &str) -> Result<String> {
         match self.read_to_send(path)? {
             Contents::Text(text) => Ok(text),
-            Contents::TooLarge => bail!("{path} is over {} MB", MAX_FILE_BYTES >> 20),
-            Contents::Binary => bail!("{path} is binary"),
-            Contents::Ignored => bail!("{path} is ignored by git"),
-            Contents::Excluded(why) => bail!("{why}"),
+            other => bail!("{}", other.why(path)),
         }
     }
 

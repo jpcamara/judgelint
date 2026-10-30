@@ -279,7 +279,7 @@ impl<'a> Reporter<'a> {
         ];
         for (n, text, tone) in [
             (counts.uncertain, "uncertain", paint::YELLOW),
-            (counts.skipped, "skipped (too large)", paint::DIM),
+            (counts.skipped, "skipped", paint::DIM),
             (counts.refused, "refused by the model", paint::DIM),
             (counts.excused, "excused by judgehints", paint::DIM),
         ] {
