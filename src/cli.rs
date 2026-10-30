@@ -154,7 +154,7 @@ impl App {
             }
             let text = match glob::read_to_send(path)? {
                 Contents::Text(text) => text,
-                Contents::Binary => return Ok(None),
+                Contents::Binary | Contents::Ignored => return Ok(None),
                 Contents::TooLarge => return runner.skip_file(path).map(Some),
                 Contents::Excluded(why) => {
                     eprintln!("judgelint: left out {why}");

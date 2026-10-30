@@ -46,19 +46,22 @@ pub fn since(reference: &str) -> Result<Changes> {
         "-U0",
         "--no-color",
         "--no-ext-diff",
-        // Files a .gitattributes marks binary still show their lines, and no
-        // configured filter runs.
-        "--text",
+        // No configured filter runs.
         "--no-textconv",
         "--relative",
         "--diff-filter=d",
         base.trim(),
     ])?;
     let mut changed = parse_diff(&diff);
-    for path in run(&["git", "ls-files", "-z", "--others", "--exclude-standard"])?.split('\0') {
-        if !path.is_empty() {
-            changed.insert(path.to_string(), Changed::All);
-        }
+    // A changed file with no lines in the diff, like one .gitattributes
+    // marks binary, is changed throughout.
+    let names = run(&["git", "diff", "--name-only", "-z", "--relative", "--diff-filter=d", base.trim()])?;
+    for path in names.split('\0').filter(|p| !p.is_empty()) {
+        changed.entry(path.to_string()).or_insert(Changed::All);
+    }
+    for path in run(&["git", "ls-files", "-z", "--others", "--exclude-standard"])?.split('\0').filter(|p| !p.is_empty())
+    {
+        changed.insert(path.to_string(), Changed::All);
     }
     Ok(changed)
 }
