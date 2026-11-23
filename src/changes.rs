@@ -44,7 +44,7 @@ const BASE_BRANCH_VARIABLES: [&str; 6] = [
 /// and new files too.
 pub fn since(reference: &str, committed: bool) -> Result<Changes> {
     check_ref(reference)?;
-    let base = git_text(&["merge-base", reference, "HEAD"])?;
+    let base = merge_base(reference)?;
     let compared: &[&str] = if committed { &[base.trim(), "HEAD"] } else { &[base.trim()] };
     // A move is a deletion and an addition, and the prefixes are set, since
     // a user's config can change both. No configured filter runs.
@@ -111,7 +111,9 @@ pub fn pr_base() -> Result<String> {
         bail!("Couldn't find the pull request's base branch");
     }
     check_ref(&branch)?;
-    git::run(Path::new("."), &["fetch", "--no-tags", "--quiet", "origin", &branch])?;
+    // Named in full, since a clone of one branch fetches others to FETCH_HEAD only.
+    let refspec = format!("+refs/heads/{branch}:refs/remotes/origin/{branch}");
+    git::run(Path::new("."), &["fetch", "--no-tags", "--quiet", "origin", &refspec])?;
     Ok(format!("origin/{branch}"))
 }
 
@@ -156,6 +158,23 @@ fn github_event_base() -> Option<String> {
     let event: serde_json::Value =
         serde_json::from_slice(&std::fs::read(std::env::var("GITHUB_EVENT_PATH").ok()?).ok()?).ok()?;
     event["pull_request"]["base"]["ref"].as_str().filter(|b| !b.is_empty()).map(str::to_string)
+}
+
+/// Where HEAD branched from +reference+. git says nothing when it finds no
+/// commit they share, which in CI is a checkout without enough history.
+fn merge_base(reference: &str) -> Result<String> {
+    let output = git::command(Path::new("."))
+        .args(["merge-base", reference, "HEAD"])
+        .output()
+        .map_err(|e| anyhow!("Couldn't run git: {e}"))?;
+    match output.status.code() {
+        Some(0) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Some(1) => bail!(
+            "Couldn't find where HEAD branched from {reference}: fetch more history, like fetch-depth: 0 in \
+             actions/checkout. On a GitHub pull request, --pr needs none with the default checkout."
+        ),
+        _ => bail!("git merge-base failed: {}", git::first_line(&output.stderr)),
+    }
 }
 
 /// The changed lines in `git diff -U0` output. A file's name is read only
